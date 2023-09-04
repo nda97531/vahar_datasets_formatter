@@ -9,7 +9,7 @@ from glob import glob
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
 
 if __name__ == '__main__':
-    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 
@@ -158,6 +158,9 @@ class SFUParquet(ParquetDatasetFormatter):
 
 class SFUNpyWindow(NpyWindowFormatter):
     def run(self) -> pd.DataFrame:
+        """
+        See super class's method for docstring
+        """
         # get list of parquet files
         parquet_sessions = self.get_parquet_file_list()
 

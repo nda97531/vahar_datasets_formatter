@@ -8,11 +8,11 @@ from loguru import logger
 from my_py_utils.my_py_utils.number_array import interp_resample
 
 if __name__ == '__main__':
-    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from .constant import G_TO_MS2, DEG_TO_RAD
+    from ..constant import G_TO_MS2, DEG_TO_RAD
 
 
 class FallAllDConst:

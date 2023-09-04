@@ -13,11 +13,11 @@ from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resam
 from my_py_utils.my_py_utils.time_utils import str_2_timestamp
 
 if __name__ == '__main__':
-    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from .constant import G_TO_MS2, DEG_TO_RAD
+    from ..constant import G_TO_MS2, DEG_TO_RAD
 
 
 class UPFallConst:

@@ -1,22 +1,16 @@
-import shutil
-import os
 import re
 import zipfile
 import numpy as np
 import pandas as pd
 import polars as pl
-from loguru import logger
 from glob import glob
 
 from my_py_utils.my_py_utils.string_utils import rreplace
-from my_py_utils.my_py_utils.number_array import interp_resample
 
 if __name__ == '__main__':
-    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from har_datasets.constant import DEG_TO_RAD
+    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from .constant import DEG_TO_RAD
 
 
 class RealWorldConst:
@@ -60,16 +54,26 @@ class RealWorldParquet(ParquetDatasetFormatter):
         df = pl.DataFrame(files)
         return df
 
-    def run(self):
+    def read_csv_in_zip(self, zip_file: str, csv_file: str) -> pl.DataFrame:
 
+
+    def run(self):
         # scan all sessions
         list_sessions = self.get_list_sessions()
 
-        for session in list_sessions.iter_rows():
-            for submodal_file in session:
+        # for each session
+        for session_modals in list_sessions.iter_rows():
+
+            # for each raw modal zip file of the session
+            for submodal_file in session_modals:
                 with zipfile.ZipFile(submodal_file, 'r') as zf:
-                    compressed_list = zf.namelist()
-                    _ = 1
+                    compressed_list = [item for item in zf.namelist() if item.endswith('.csv')]
+
+                    # for each device csv file in the zip file
+                    for csv_file in compressed_list:
+                        modal_device_df = pl.read_csv(zf.read(csv_file))
+
+                        _ = 1
 
         # # write
         # skipped_sessions = 0

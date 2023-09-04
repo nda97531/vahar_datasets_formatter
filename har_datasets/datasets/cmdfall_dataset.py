@@ -9,16 +9,16 @@ import polars as pl
 from loguru import logger
 from transforms3d.axangles import axangle2mat
 
-from my_py_utils.my_py_utils.number_array import interval_intersection
 from my_py_utils.my_py_utils.string_utils import rreplace
-from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
 
 if __name__ == '__main__':
-    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from har_datasets.constant import G_TO_MS2
+    from har_datasets.modal_sync import split_interrupted_session
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from .constant import G_TO_MS2
+    from ..constant import G_TO_MS2
+    from ..modal_sync import split_interrupted_session
 
 
 class CMDFallConst:
@@ -97,7 +97,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
         assert len(set(use_accelerometer) - {1, 155}) == 0, 'Invalid inertial sensor ID. Allowed: [1, 155]'
         assert len(set(use_kinect) - set(range(1, 8))) == 0, f'Invalid Kinect ID. Allowed: {list(range(1, 8))}'
 
-        self.min_length_segment = min_length_segment
+        self.min_length_segment = min_length_segment * 1000
         self.use_accelerometer = use_accelerometer
         self.use_kinect = use_kinect
 
@@ -233,68 +233,38 @@ class CMDFallParquet(ParquetDatasetFormatter):
         # read all DFs
         # key: modal; value: whole original session DF
         data_dfs = {
-            sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(
-                CMDFallConst.MODAL_INERTIA)
+            sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(CMDFallConst.MODAL_INERTIA)
             else self.read_skeleton_df_file(data_file)
             for sensor, data_file in data_files.items()
         }
 
-        # split interrupted signals into sub-sessions
-        # key: modal; value: list of pairs [start ts, end ts] for each segment
-        ts_segments = {}
-        for sensor, df in data_dfs.items():
-            ts = df.get_column('timestamp(ms)').to_numpy()
-            intervals = np.diff(ts)
-            interruption_idx = np.nonzero(intervals > self.max_interval[sensor.split('_')[0]])[0]
-            interruption_idx = np.concatenate([[-1], interruption_idx, [len(intervals)]])
-            ts_segments[sensor] = [
-                [ts[interruption_idx[i - 1] + 1], ts[interruption_idx[i]]]
-                for i in range(1, len(interruption_idx))
-            ]
-        combined_ts_segments = interval_intersection(list(ts_segments.values()))
-        logger.info(f'Number of segments: ' + '; '.join(f'{k}: {len(v)}' for k, v in ts_segments.items()))
+        # split interrupted signals into uninterrupted sub-sessions
+        max_interval = {key: self.max_interval[key.split('_')[0]] for key in data_dfs.keys()}
+        sampling_rates = {key: self.sampling_rates[key.split('_')[0]] for key in data_dfs.keys()}
+        external_split = split_interrupted_session(
+            data_dfs, max_interval=max_interval, min_length_segment=self.min_length_segment,
+            sampling_rates=sampling_rates
+        )
 
-        # crop segments based on timestamps found above
+        # concat DFs of the same sensor type (same modal); for example: concat [inertia_1, inertia_155] => inertia
+        # only keep ts column for 1 DF of each sensor for later concatenation
         results = []
-        kept_segments = 0
-        kept_time = 0
-        total_time = 0
         # for each segment
-        for combined_ts_segment in combined_ts_segments:
-            segment_length = (combined_ts_segment[1] - combined_ts_segment[0]) / 1000
-            total_time += segment_length
-            if segment_length < self.min_length_segment:
-                continue
-            kept_time += segment_length
-            kept_segments += 1
-
-            # dict key: sensor type; value: concatenated DF of all sensors of this type
+        for segment in external_split:
             segment_dfs = defaultdict(list)
             # for each sensor
-            for sensor, df in data_dfs.items():
+            for sensor, df in segment.items():
                 # remove sensor ID, keep sensor type
                 sensor = sensor.split('_')[0]
 
-                # crop the segment in sensor DF
-                df = df.filter(pl.col('timestamp(ms)').is_between(combined_ts_segment[0].item(),
-                                                                  combined_ts_segment[1].item()))
-
-                # interpolate to resample
-                df = df.select(pl.exclude('label'))
-                df = pl_resample_numeric_df(df, 'timestamp(ms)', self.sampling_rates[sensor],
-                                            start_ts=combined_ts_segment[0], end_ts=combined_ts_segment[1])
-                # only keep ts column for 1 DF of each sensor for later concatenation
+                # only keep ts column for 1 DF of each sensor to avoid duplicate column name during concatenation
                 if len(segment_dfs[sensor]):
                     df = df.select(pl.exclude('timestamp(ms)', 'frame_index'))
                 segment_dfs[sensor].append(df)
 
             # concat DFs with the same sensor type, add label column
-            segment_dfs = {sensor: pl.concat(list_dfs, how='horizontal')
-                           for sensor, list_dfs in segment_dfs.items()}
-
+            segment_dfs = {sensor: pl.concat(list_dfs, how='horizontal') for sensor, list_dfs in segment_dfs.items()}
             results.append(segment_dfs)
-        logger.info(f'Kept {kept_segments}/{len(combined_ts_segments)} segment(s)')
-        logger.info('Kept %.02f/%.02f (sec); %.02f%%' % (kept_time, total_time, kept_time / total_time * 100))
         return results
 
     def assign_label(self, ske_df: pl.DataFrame, acc_df: pl.DataFrame, anno_df: pl.DataFrame) -> tuple:
@@ -415,21 +385,21 @@ class CMDFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/CMDFall'
+    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/CMDFall_debug'
     inertial_freq = 50
     skeletal_freq = 20
     window_size_sec = 3
     step_size_sec = 1.5
     min_step_size_sec = 0.5
 
-    # CMDFallParquet(
-    #     raw_folder='/mnt/data_drive/projects/raw datasets/CMDFall',
-    #     destination_folder=parquet_dir,
-    #     sampling_rates={CMDFallConst.MODAL_INERTIA: inertial_freq,
-    #                     CMDFallConst.MODAL_SKELETON: skeletal_freq},
-    #     use_accelerometer=[1, 155],
-    #     use_kinect=[3]
-    # ).run()
+    CMDFallParquet(
+        raw_folder='/mnt/data_drive/projects/raw datasets/CMDFall',
+        destination_folder=parquet_dir,
+        sampling_rates={CMDFallConst.MODAL_INERTIA: inertial_freq,
+                        CMDFallConst.MODAL_SKELETON: skeletal_freq},
+        use_accelerometer=[1, 155],
+        use_kinect=[3]
+    ).run()
 
     # CMDFall = CMDFallNpyWindow(
     #     parquet_root_dir=parquet_dir,
