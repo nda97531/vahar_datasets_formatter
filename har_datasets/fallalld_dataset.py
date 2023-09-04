@@ -4,9 +4,15 @@ import numpy as np
 import pandas as pd
 import polars as pl
 from loguru import logger
-from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
+
 from my_py_utils.my_py_utils.number_array import interp_resample
+
+if __name__ == '__main__':
+    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
+else:
+    from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from .constant import G_TO_MS2, DEG_TO_RAD
 
 
 class FallAllDConst:
@@ -18,9 +24,6 @@ class FallAllDConst:
 
 
 class FallAllDParquet(ParquetDatasetFormatter):
-    def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict):
-        super().__init__(raw_folder, destination_folder, sampling_rates)
-
     def read_dataset_pkl_file(self, path: str) -> pd.DataFrame:
         """
         Read raw pkl file, filter out unnecessary rows and columns, convert data unit
@@ -233,7 +236,7 @@ class FallAllDNpyWindow(NpyWindowFormatter):
             # 0: non-fall; 1: fall
             session_label = session_label >= 100
 
-            session_result = self.process_parquet_to_windows(
+            session_result = self.parquet_to_windows(
                 parquet_session=parquet_session, subject=subject, session_label=int(session_label),
                 is_short_activity=session_label if shift_short_activity else False
             )

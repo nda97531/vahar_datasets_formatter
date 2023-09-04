@@ -9,10 +9,15 @@ from loguru import logger
 from glob import glob
 from typing import Tuple, Union
 
-from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
 from my_py_utils.my_py_utils.time_utils import str_2_timestamp
+
+if __name__ == '__main__':
+    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.constant import G_TO_MS2, DEG_TO_RAD
+else:
+    from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from .constant import G_TO_MS2, DEG_TO_RAD
 
 
 class UPFallConst:
@@ -392,7 +397,7 @@ class UPFallNpyWindow(NpyWindowFormatter):
             session_regex = re.match('Subject(?:[0-9]*)Activity([0-9]*)Trial([0-9]*)', session_id)
             session_label, session_trial = (int(session_regex.group(i)) for i in [1, 2])
 
-            session_result = self.process_parquet_to_windows(
+            session_result = self.parquet_to_windows(
                 parquet_session=parquet_session,
                 subject=subject,
                 session_label=session_label,

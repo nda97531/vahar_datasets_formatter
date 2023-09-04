@@ -3,18 +3,22 @@ import re
 from collections import defaultdict
 from glob import glob
 from typing import List, Dict
-
 import numpy as np
 import pandas as pd
 import polars as pl
 from loguru import logger
 from transforms3d.axangles import axangle2mat
 
-from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-from har_datasets.constant import G_TO_MS2
 from my_py_utils.my_py_utils.number_array import interval_intersection
 from my_py_utils.my_py_utils.string_utils import rreplace
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
+
+if __name__ == '__main__':
+    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.constant import G_TO_MS2
+else:
+    from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from .constant import G_TO_MS2
 
 
 class CMDFallConst:
@@ -89,8 +93,8 @@ class CMDFallParquet(ParquetDatasetFormatter):
         assert len(use_kinect), 'No kinect is used? Label info is stored in skeleton files.'
         super().__init__(raw_folder, destination_folder, sampling_rates)
 
-        assert len(set(use_accelerometer) - {1, 155}) == 0, 'Invalid inertial sensor ID'
-        assert len(set(use_kinect) - set(range(1, 8))) == 0, 'Invalid Kinect ID'
+        assert len(set(use_accelerometer) - {1, 155}) == 0, 'Invalid inertial sensor ID. Allowed: [1, 155]'
+        assert len(set(use_kinect) - set(range(1, 8))) == 0, f'Invalid Kinect ID. Allowed: {list(range(1, 8))}'
 
         self.min_length_segment = min_length_segment
         self.use_accelerometer = use_accelerometer
@@ -235,7 +239,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
         }
 
         # split interrupted signals into sub-sessions
-        # key: modal; value: timestamp segments (start & end ts)
+        # key: modal; value: list of pairs [start ts, end ts] for each segment
         ts_segments = {}
         for sensor, df in data_dfs.items():
             ts = df.get_column('timestamp(ms)').to_numpy()
@@ -402,7 +406,7 @@ class CMDFallNpyWindow(NpyWindowFormatter):
             # get session info
             modal, subject, session_id = self.get_parquet_session_info(list(parquet_session.values())[0])
 
-            session_result = self.process_parquet_to_windows(parquet_session=parquet_session, subject=subject)
+            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
 
             result.append(session_result)
         result = pd.DataFrame(result)

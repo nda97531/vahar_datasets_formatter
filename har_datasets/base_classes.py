@@ -58,7 +58,7 @@ class ParquetDatasetFormatter:
 
         Args:
             data: a DF
-            modal: modality name (e.g. accelerometer, skeleton, label)
+            modal: modality name (e.g. accelerometer, skeleton)
             subject: subject name/ID
             session: session ID
 
@@ -99,7 +99,7 @@ class NpyWindowFormatter:
             min_step_size_sec: for short activity sessions, this is used as minimum step size (in shifting window)
             max_short_window: max number of window for short activity sessions (use shifting window)
             modal_cols: a 2-level dict;
-                1st level key is parquet modal name (match with modal name in parquet file path),
+                1st level key is modal name (match with modal name in parquet file path),
                 2nd level key is sub-modal names from the same parquet files (any new name),
                 2nd level value is a list of column names of that sub-modal. if None, use all columns.
                 Example
@@ -139,7 +139,7 @@ class NpyWindowFormatter:
 
     def get_parquet_modals(self) -> list:
         """
-        Get a list of parquet modal names
+        Get a list of modal names of this dataset
 
         Returns:
             list of strings
@@ -154,7 +154,7 @@ class NpyWindowFormatter:
         Scan all parquet files in the root dir
 
         Returns:
-            a DataFrame, each column is a parquet modality, each row is a session, cells are paths to parquet files
+            a DataFrame, each column is a data modality, each row is a session, cells are paths to parquet files
         """
         modals = self.get_parquet_modals()
 
@@ -212,7 +212,7 @@ class NpyWindowFormatter:
 
         Args:
             df: Dataframe with 'timestamp(ms)' and 'label' columns, others are feature columns
-            modality: parquet modality of this DF
+            modality: data modality of this DF
             session_label: main label of this session, only used if `is_short_activity` is True
             is_short_activity: whether this session is of short activities.
                 Only support short activities of ONE label in a session
@@ -290,10 +290,10 @@ class NpyWindowFormatter:
 
         return result
 
-    def process_parquet_to_windows(self, parquet_session: dict, subject: any, session_label: int = None,
-                                   is_short_activity: bool = False) -> dict:
+    def parquet_to_windows(self, parquet_session: dict, subject: any, session_label: int = None,
+                           is_short_activity: bool = False) -> dict:
         """
-        Process from parquet files to window data (np array). Each parquet file is a modal from ONE session.
+        Process from parquet files of ONE session to window data (np array).
 
         Args:
             parquet_session: dict with keys are modal names, values are parquet file paths
@@ -313,10 +313,14 @@ class NpyWindowFormatter:
                     'subject': subject ID
                 }
         """
+        # dict to be returned
         session_result = {}
+        # list of window labels of each modal
         modal_labels = []
+        # number of windows, shared among all modals
         min_num_windows = float('inf')
-        # for each parquet modal, run sliding window
+
+        # for each modal, run sliding window
         for modal, parquet_file in parquet_session.items():
             if modal not in self.modal_cols:
                 continue
@@ -361,4 +365,9 @@ class NpyWindowFormatter:
                 - '<modality 2>': ...
                 - 'label': array shape [num window]
         """
+        # to override:
+        # step 1: call self.get_parquet_file_list() to get data parquet file paths of all sessions
+        # for each session:
+        # step 2: call self.get_parquet_session_info() to get session info if needed
+        # step 3: call self.parquet_to_windows() to run sliding window on each session
         raise NotImplementedError()

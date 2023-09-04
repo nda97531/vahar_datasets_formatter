@@ -6,8 +6,12 @@ import polars as pl
 from loguru import logger
 from glob import glob
 
-from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
+
+if __name__ == '__main__':
+    from har_datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+else:
+    from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 
 
 class SFUConst:
@@ -165,7 +169,7 @@ class SFUNpyWindow(NpyWindowFormatter):
             session_label = session_id.split('_')[0]
             session_label = int(session_label == SFUConst.FALL_CLASS)
 
-            session_result = self.process_parquet_to_windows(
+            session_result = self.parquet_to_windows(
                 parquet_session=parquet_session,
                 subject=subject,
                 session_label=session_label,
