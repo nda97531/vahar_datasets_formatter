@@ -24,6 +24,11 @@ class FallAllDConst:
 
 
 class FallAllDParquet(ParquetDatasetFormatter):
+    """
+    FallAllD dataset.
+    Convert all labels into 2 labels: Fall (1) and Non-fall (0)
+    """
+
     def read_dataset_pkl_file(self, path: str) -> pd.DataFrame:
         """
         Read raw pkl file, filter out unnecessary rows and columns, convert data unit

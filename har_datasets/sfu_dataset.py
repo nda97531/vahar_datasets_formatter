@@ -38,7 +38,7 @@ class SFUParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  extend_fall_msec: tuple = (1000, 1000)):
         """
-        Process SFU-IMU dataset to parquet
+        Process SFU-IMU dataset to parquet. Convert all labels into 2 labels: Fall (1) and Non-fall (0)
 
         Args:
             extend_fall_msec: extend a fall by some msec to 2 sides of the highest acceleration peak

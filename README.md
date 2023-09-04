@@ -1,6 +1,6 @@
 # har_datasets
 
-Process HAR timeseries datasets to the same format.
+This code processes HAR timeseries datasets to the same format for easier usage. The file `example.py` shows a usage example.  
 
 ## Directory tree of the formatted dataset
 

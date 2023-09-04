@@ -28,16 +28,14 @@ class RealWorldConst:
 
 
 class RealWorldParquet(ParquetDatasetFormatter):
-    """
-    Class for RealWorld2016 dataset.
-    In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
-    [acc, gyr, mag], which are also raw modals.
-    """
-
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  sub_modals: dict = {'inertia': ['acc', 'gyr']}
                  ):
         """
+        Class for RealWorld2016 dataset.
+        In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
+        [acc, gyr, mag], which are also raw modals.
+
         Args:
             sub_modals: a dict containing sub-modal names of each modal
                 - key: modal name (any name), this will be used in output paths
@@ -71,7 +69,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
             for submodal_file in session:
                 with zipfile.ZipFile(submodal_file, 'r') as zf:
                     compressed_list = zf.namelist()
-                    _=1
+                    _ = 1
 
         # # write
         # skipped_sessions = 0

@@ -75,15 +75,16 @@ CMDFallConst.define_att()
 
 
 class CMDFallParquet(ParquetDatasetFormatter):
-    """
-    Class for processing CMDFall dataset.
-    Use only Inertial sensors and Camera 3.
-    """
-
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  min_length_segment: float = 10,
                  use_accelerometer: list = [155], use_kinect: list = [3]):
         """
+        Class for processing CMDFall dataset.
+        Use only Inertial sensors and Camera 3.
+        Labels:
+        - 0: unknown label
+        - from 1 to 20: as in the raw dataset
+
         Args:
             min_length_segment: only write segments longer than this threshold (unit: sec)
             use_accelerometer: inertial sensor IDs
