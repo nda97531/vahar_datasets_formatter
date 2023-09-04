@@ -97,6 +97,8 @@ class UPFallParquet(ParquetDatasetFormatter):
     """
     Class for processing UP-Fall dataset.
     Use only Inertial sensors and Camera2.
+    Before running this class, extract 2d skeleton from Camera2 and put into folder as the example below:
+    UP-Fall/Subject1/Activity1/Trial1/Subject1Activity1Trial1Camera2/skeleton/<skeleton json file>.json
     """
 
     @staticmethod

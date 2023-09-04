@@ -246,25 +246,25 @@ class FallAllDNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/FallAllD'
+    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/FallAllD2'
 
-    # FallAllDParquet(
-    #     raw_folder='/mnt/data_drive/projects/raw datasets/FallAllD/',
-    #     destination_folder=parquet_dir,
-    #     sampling_rates={FalAllDConstant.MODAL_INERTIA: 50}
-    # ).run()
-
-    dataset_window = FallAllDNpyWindow(
-        parquet_root_dir=parquet_dir,
-        window_size_sec=4,
-        step_size_sec=2,
-        min_step_size_sec=0.5,
-        max_short_window=5,
-        modal_cols={
-            FallAllDConst.MODAL_INERTIA: {
-                'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)'],
-                'wrist': ['wrist_acc_x(m/s^2)', 'wrist_acc_y(m/s^2)', 'wrist_acc_z(m/s^2)']
-            }
-        }
+    FallAllDParquet(
+        raw_folder='/mnt/data_drive/projects/raw datasets/FallAllD/',
+        destination_folder=parquet_dir,
+        sampling_rates={FallAllDConst.MODAL_INERTIA: 50}
     ).run()
+
+    # dataset_window = FallAllDNpyWindow(
+    #     parquet_root_dir=parquet_dir,
+    #     window_size_sec=4,
+    #     step_size_sec=2,
+    #     min_step_size_sec=0.5,
+    #     max_short_window=5,
+    #     modal_cols={
+    #         FallAllDConst.MODAL_INERTIA: {
+    #             'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)'],
+    #             'wrist': ['wrist_acc_x(m/s^2)', 'wrist_acc_y(m/s^2)', 'wrist_acc_z(m/s^2)']
+    #         }
+    #     }
+    # ).run()
     _ = 1

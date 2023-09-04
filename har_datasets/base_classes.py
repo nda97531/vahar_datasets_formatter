@@ -54,10 +54,10 @@ class ParquetDatasetFormatter:
 
     def write_output_parquet(self, data: pl.DataFrame, modal: str, subject: any, session: any) -> bool:
         """
-        Write a processed DataFrame
+        Write a processed DataFrame of 1 modality, 1 session
 
         Args:
-            data: a DF
+            data: a DF containing data of 1 modality, 1 session
             modal: modality name (e.g. accelerometer, skeleton)
             subject: subject name/ID
             session: session ID
@@ -65,6 +65,15 @@ class ParquetDatasetFormatter:
         Returns:
             boolean, file written successfully or not
         """
+        assert 'label' in data.columns, 'No "label" column in output DF'
+        assert 'timestamp(ms)' in data.columns, 'No "timestamp(ms)" column in output DF'
+
+        df_interval = data.item(1, 'timestamp(ms)') - data.item(0, 'timestamp(ms)')
+        expected_interval = 1 / self.sampling_rates[modal]
+        assert df_interval == expected_interval, \
+            (f'Unexpected timestamp interval in output DF. '
+             f'Expected: {expected_interval}(ms), but actual: {df_interval}(ms)')
+
         output_path = self.get_output_file_path(modal=modal, subject=subject, session=session)
 
         # check if there's any NAN
@@ -81,6 +90,7 @@ class ParquetDatasetFormatter:
         """
         Main processing method
         """
+        # to override: process data of any dataset and call self.write_output_parquet() for every modal of every session
         raise NotImplementedError()
 
 
