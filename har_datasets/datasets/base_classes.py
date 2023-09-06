@@ -83,7 +83,7 @@ class ParquetDatasetFormatter:
 
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)
         data.write_parquet(output_path)
-        logger.info(f'Parquet written: {output_path}')
+        logger.info(f'Parquet shape {data.shape} written: {output_path}')
         return True
 
     def run(self):
@@ -101,6 +101,9 @@ class NpyWindowFormatter:
                  modal_cols: dict = None):
         """
         This class takes result of `ParquetDatasetFormatter`, run sliding window and return as numpy array.
+        If a session is of short activities, only take windows containing those activities and assign those labels
+        (without needing to vote within windows). For example: a 20-second session has only 2-second Fall activity,
+        then this codes only take windows including that 2-second segment.
 
         Args:
             parquet_root_dir: path to processed parquet root dir
@@ -133,15 +136,14 @@ class NpyWindowFormatter:
         self.max_short_window = max_short_window
 
         # standardise `modal_cols`
-        parquet_modals = self.get_parquet_modals()
         # compose dict of used columns if it has not already been defined
         if modal_cols is None:
+            parquet_modals = self.get_parquet_modals()
             modal_cols = {modal: {modal: None} for modal in parquet_modals}
         else:
             for parquet_modal, sub_modal_dict in modal_cols.items():
                 if sub_modal_dict is None:
                     modal_cols[parquet_modal] = {parquet_modal: None}
-
         self.modal_cols = modal_cols
 
         # flag to control log printing column names
@@ -166,7 +168,7 @@ class NpyWindowFormatter:
         Returns:
             a DataFrame, each column is a data modality, each row is a session, cells are paths to parquet files
         """
-        modals = self.get_parquet_modals()
+        modals = list(self.modal_cols.keys())
 
         # glob first modal
         first_modal_parquets = sorted(glob(PARQUET_PATH_PATTERN.format(
@@ -187,10 +189,10 @@ class NpyWindowFormatter:
 
         # get matching session files of all modals
         result = []
-        for first_modal_parquet in first_modal_parquets:
-            session_dict = {modals[0]: first_modal_parquet}
+        for pq_path in first_modal_parquets:
+            session_dict = {modals[0]: pq_path}
             for modal in modals[1:]:
-                session_dict[modal] = rreplace(first_modal_parquet, f'/{modals[0]}/', f'/{modal}/')
+                session_dict[modal] = rreplace(pq_path, f'/{modals[0]}/', f'/{modal}/')
                 assert os.path.isfile(session_dict[modal]), f'Modal parquet file not exist: {session_dict[modal]}'
             result.append(session_dict)
 
@@ -360,7 +362,7 @@ class NpyWindowFormatter:
         # add label info; only need to take labels of the first modal because all modalities have the same labels
         session_result['label'] = modal_labels[0][:min_num_windows]
 
-        # only print column names for 1 session
+        # only print column names for the first session
         self.verbose = False
         return session_result
 

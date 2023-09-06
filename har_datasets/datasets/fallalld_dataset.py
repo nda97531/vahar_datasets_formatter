@@ -219,14 +219,9 @@ class FallAllDNpyWindow(NpyWindowFormatter):
         ))
         return df
 
-    def run(self, shift_short_activity: bool = True) -> pd.DataFrame:
+    def run(self) -> pd.DataFrame:
         """
-
-        Args:
-            shift_short_activity: whether to run shifting windows on fall sessions (or just run normal sliding window)
-
-        Returns:
-            please see parent class's method
+        please see parent class's method docstring
         """
         # get list of parquet files
         parquet_sessions = self.get_parquet_file_list()
@@ -243,7 +238,7 @@ class FallAllDNpyWindow(NpyWindowFormatter):
 
             session_result = self.parquet_to_windows(
                 parquet_session=parquet_session, subject=subject, session_label=int(session_label),
-                is_short_activity=session_label if shift_short_activity else False
+                is_short_activity=session_label
             )
             result.append(session_result)
         result = pd.DataFrame(result)

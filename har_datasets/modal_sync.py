@@ -6,8 +6,8 @@ from my_py_utils.my_py_utils.number_array import interval_intersection
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
 
 
-def split_interrupted_session(dfs: dict, max_interval: dict, min_length_segment: float,
-                              sampling_rates: dict) -> list:
+def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: float,
+                          sampling_rates: dict) -> list:
     """
     Split an interrupted session into multiple uninterrupted sub-sessions with even timestamps (interpolated)
 
@@ -24,9 +24,7 @@ def split_interrupted_session(dfs: dict, max_interval: dict, min_length_segment:
             - value: sampling rate to interpolate, unit: sample/millisecond
 
     Returns:
-        a tuple of 2 elements:
-            - list of dicts, each dict has the same format as the input dict
-            - list of pairs [start ts, end ts] of each segment
+        list of dicts, each dict is an uninterrupted segment and has the same format as the input dict
     """
     # split interrupted signals into sub-sessions
     # key: modal; value: list of pairs [start ts, end ts] for each segment

@@ -14,11 +14,11 @@ from my_py_utils.my_py_utils.string_utils import rreplace
 if __name__ == '__main__':
     from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from har_datasets.constant import G_TO_MS2
-    from har_datasets.modal_sync import split_interrupted_session
+    from har_datasets.modal_sync import split_interrupted_dfs
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..constant import G_TO_MS2
-    from ..modal_sync import split_interrupted_session
+    from ..modal_sync import split_interrupted_dfs
 
 
 class CMDFallConst:
@@ -112,6 +112,39 @@ class CMDFallParquet(ParquetDatasetFormatter):
         # read annotation file
         anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
         self.anno_df = anno_df.filter(pl.col('kinect_id') == use_kinect[0])
+
+    def scan_data_files(self) -> pd.DataFrame:
+        """
+        Scan all data files
+
+        Returns:
+            a DF, each row is a session, each column is a sensor; column name format: '{sensor type}_{sensor id}'
+        """
+        # scan files of the first accelerometer
+        first_inertia_name = f'{CMDFallConst.MODAL_INERTIA}_{self.use_accelerometer[0]}'
+        session_files = {
+            first_inertia_name: sorted(
+                glob(f'{self.raw_folder}/accelerometer/*I{self.use_accelerometer[0]}.txt'))
+        }
+        # generate file names for other accelerometer(s)
+        old_path_tail = f'I{self.use_accelerometer[0]}.txt'
+        for inertia_sensor_id in self.use_accelerometer[1:]:
+            new_path_tail = f'I{inertia_sensor_id}.txt'
+            session_files[f'{CMDFallConst.MODAL_INERTIA}_{inertia_sensor_id}'] = [
+                rreplace(path, old_path_tail, new_path_tail)
+                for path in session_files[first_inertia_name]
+            ]
+
+        # generate file names for skeleton files
+        for kinect_id in self.use_kinect:
+            new_path_tail = f'K{kinect_id}.txt'
+            session_files[f'{CMDFallConst.MODAL_SKELETON}_{kinect_id}'] = [
+                rreplace(rreplace(path, old_path_tail, new_path_tail), 'accelerometer', 'skeleton')
+                for path in session_files[first_inertia_name]
+            ]
+
+        session_files = pd.DataFrame(session_files)
+        return session_files
 
     @staticmethod
     def get_info_from_session_file(path: str) -> tuple:
@@ -220,52 +253,50 @@ class CMDFallParquet(ParquetDatasetFormatter):
         df = pl.concat([info_df, data_df], how='horizontal')
         return df
 
-    def process_session(self, data_files: dict) -> list:
+    def split_session_to_segments(self, data_dfs: dict) -> list:
         """
-        Process dataframe for each modal in a session into uninterrupted segments
+        Split dataframes of a session into uninterrupted segments
 
         Args:
-            data_files: a dict with keys are modal names, values are raw data paths
+            data_dfs: a dict with keys are sensor (format: '{sensor type}_{sensor id}'), values are data DFs
 
         Returns:
             list of uninterrupted segments; each one is a dict with keys are modal names, values are DFs
         """
-        # read all DFs
-        # key: modal; value: whole original session DF
-        data_dfs = {
-            sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(CMDFallConst.MODAL_INERTIA)
-            else self.read_skeleton_df_file(data_file)
-            for sensor, data_file in data_files.items()
-        }
-
         # split interrupted signals into uninterrupted sub-sessions
         max_interval = {key: self.max_interval[key.split('_')[0]] for key in data_dfs.keys()}
         sampling_rates = {key: self.sampling_rates[key.split('_')[0]] for key in data_dfs.keys()}
-        external_split = split_interrupted_session(
+        segments = split_interrupted_dfs(
             data_dfs, max_interval=max_interval, min_length_segment=self.min_length_segment,
             sampling_rates=sampling_rates
         )
+        return segments
 
-        # concat DFs of the same sensor type (same modal); for example: concat [inertia_1, inertia_155] => inertia
-        # only keep ts column for 1 DF of each sensor for later concatenation
-        results = []
-        # for each segment
-        for segment in external_split:
-            segment_dfs = defaultdict(list)
-            # for each sensor
-            for sensor, df in segment.items():
-                # remove sensor ID, keep sensor type
-                sensor = sensor.split('_')[0]
+    def concat_sensors_to_modal(self, data_dict: dict) -> dict:
+        """
+        Concat DFs of the same sensor type (same modal);
+        For example: concat [inertia_1, inertia_155] => inertia
 
-                # only keep ts column for 1 DF of each sensor to avoid duplicate column name during concatenation
-                if len(segment_dfs[sensor]):
-                    df = df.select(pl.exclude('timestamp(ms)', 'frame_index'))
-                segment_dfs[sensor].append(df)
+        Args:
+            data_dict: dict[sensor] = DF; key has the format: '{sensor type}_{sensor id}'
 
-            # concat DFs with the same sensor type, add label column
-            segment_dfs = {sensor: pl.concat(list_dfs, how='horizontal') for sensor, list_dfs in segment_dfs.items()}
-            results.append(segment_dfs)
-        return results
+        Returns:
+            a dict with format: dict[modal] = DF
+        """
+        dfs = defaultdict(list)
+        # for each sensor
+        for sensor, df in data_dict.items():
+            # remove sensor ID, keep sensor type
+            sensor = sensor.split('_')[0]
+
+            # only keep ts column for 1 DF of each sensor to avoid duplicate column name during concatenation
+            if len(dfs[sensor]):
+                df = df.select(pl.exclude('timestamp(ms)', 'frame_index'))
+            dfs[sensor].append(df)
+
+        # concat DFs with the same sensor type, add label column
+        dfs = {sensor: pl.concat(list_dfs, how='horizontal') for sensor, list_dfs in dfs.items()}
+        return dfs
 
     def assign_label(self, ske_df: pl.DataFrame, acc_df: pl.DataFrame, anno_df: pl.DataFrame) -> tuple:
         """
@@ -302,31 +333,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
 
     def run(self):
         logger.info('Scanning for sessions...')
-
-        # scan files of the first accelerometer
-        first_inertia_name = f'{CMDFallConst.MODAL_INERTIA}_{self.use_accelerometer[0]}'
-        session_files = {
-            first_inertia_name: sorted(
-                glob(f'{self.raw_folder}/accelerometer/*I{self.use_accelerometer[0]}.txt'))
-        }
-        # generate file names for other accelerometer(s)
-        old_path_tail = f'I{self.use_accelerometer[0]}.txt'
-        for inertia_sensor_id in self.use_accelerometer[1:]:
-            new_path_tail = f'I{inertia_sensor_id}.txt'
-            session_files[f'{CMDFallConst.MODAL_INERTIA}_{inertia_sensor_id}'] = [
-                rreplace(path, old_path_tail, new_path_tail)
-                for path in session_files[first_inertia_name]
-            ]
-
-        # generate file names for skeleton files
-        for kinect_id in self.use_kinect:
-            new_path_tail = f'K{kinect_id}.txt'
-            session_files[f'{CMDFallConst.MODAL_SKELETON}_{kinect_id}'] = [
-                rreplace(rreplace(path, old_path_tail, new_path_tail), 'accelerometer', 'skeleton')
-                for path in session_files[first_inertia_name]
-            ]
-
-        session_files = pd.DataFrame(session_files)
+        session_files = self.scan_data_files()
         logger.info(f'Found {len(session_files)} sessions in total')
 
         skip_session_files = 0
@@ -345,8 +352,18 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 continue
             logger.info(f'Starting session {session_info}')
 
-            # get data
-            data_segments = self.process_session(session_row.to_dict())
+            # read all data DFs of session
+            # key: modal; value: whole original session DF
+            data_dfs = {
+                sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(CMDFallConst.MODAL_INERTIA)
+                else self.read_skeleton_df_file(data_file)
+                for sensor, data_file in session_row.iteritems()
+            }
+            # split session into uninterrupted segments
+            data_segments = self.split_session_to_segments(data_dfs)
+            # concat sensors into modals
+            data_segments = [self.concat_sensors_to_modal(seg) for seg in data_segments]
+
             # get annotation DF
             session_anno_df = self.anno_df.filter(pl.col('setup_id') == session_id)
 

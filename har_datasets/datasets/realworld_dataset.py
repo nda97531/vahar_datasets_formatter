@@ -1,5 +1,9 @@
+import os
 import re
 import zipfile
+from collections import defaultdict
+from typing import Dict
+from loguru import logger
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -9,34 +13,79 @@ from my_py_utils.my_py_utils.string_utils import rreplace
 
 if __name__ == '__main__':
     from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from har_datasets.modal_sync import split_interrupted_dfs
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from ..modal_sync import split_interrupted_dfs
 
 
 class RealWorldConst:
     # modal names
     MODAL_INERTIA = 'inertia'
 
-    RAW_MODALS = ['acc', 'gyr', 'mag', 'lig', 'mic', 'gps']
+    # unsupported: 'mag', 'lig', 'mic', 'gps'
+    SUBMODAL_SI_UNIT = {
+        'acc': 'm/s^2',
+        'gyr': 'rad/s'
+    }
+    RAW_MODALS: list
+
     CLASS_LABELS = ['walking', 'running', 'sitting', 'standing', 'lying', 'climbingup', 'climbingdown', 'jumping']
+    SENSOR_POSITION = {'chest', 'forearm', 'head', 'shin', 'thigh', 'upperarm', 'waist'}
+
+    @classmethod
+    def define_att(cls):
+        # submodal (or raw modal) name
+        cls.RAW_MODALS = list(cls.SUBMODAL_SI_UNIT)
+
+
+RealWorldConst.define_att()
 
 
 class RealWorldParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
-                 sub_modals: dict = {'inertia': ['acc', 'gyr']}
-                 ):
+                 used_modals: dict = {'inertia': ['acc', 'gyr']}, sensor_pos: list = ('waist',),
+                 min_length_segment: float = 10, max_interval: dict = None):
         """
         Class for RealWorld2016 dataset.
         In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
         [acc, gyr, mag], which are also raw modals.
 
         Args:
-            sub_modals: a dict containing sub-modal names of each modal
+            raw_folder: path to unprocessed dataset
+            destination_folder: folder to save output
+            sampling_rates: a dict containing sampling rates of each modal to resample by linear interpolation.
+                - key: modal name
+                - value: sampling rate (unit: Hz)
+            used_modals: a dict containing sub-modal names of each modal
                 - key: modal name (any name), this will be used in output paths
                 - value: list of sub-modal names, choices are in RealWorldConst.RAW_MODALS
+            sensor_pos: list of sensor positions to take
+                (don't use all by default to avoid more interruptions in session)
+            min_length_segment: only write segments longer than this threshold (unit: sec)
+            max_interval: dict[submodal] = maximum intervals (millisecond) between rows of an uninterrupted segment
         """
+        all_submodals = np.concatenate(list(used_modals.values()))
+        assert len(set(all_submodals) - set(RealWorldConst.RAW_MODALS)) == 0, \
+            (f'Invalid raw modal: {set(all_submodals) - set(RealWorldConst.RAW_MODALS)}; '
+             f'Expected values in: {RealWorldConst.RAW_MODALS}')
+        assert len(all_submodals) == len(set(all_submodals)), 'Duplicate sub_modals, please check'
+        assert len(set(sensor_pos) - RealWorldConst.SENSOR_POSITION) == 0, \
+            (f'Invalid sensor positions found: {set(sensor_pos) - RealWorldConst.SENSOR_POSITION}; '
+             f'Expected values in: {RealWorldConst.SENSOR_POSITION}')
+
         super().__init__(raw_folder, destination_folder, sampling_rates)
-        self.sub_modals = sub_modals
+
+        self.sensor_pos = sensor_pos
+        self.min_length_segment = min_length_segment * 1000
+
+        self.submodal_2_modal = {submodal: modal
+                                 for modal in used_modals
+                                 for submodal in used_modals[modal]}
+        self.max_interval = {'acc': 500, 'gyr': 500}
+        if max_interval:
+            max_interval = {k: v * 1000 for k, v in max_interval.items()}
+            self.max_interval.update(max_interval)
 
     def get_list_sessions(self) -> pl.DataFrame:
         """
@@ -54,77 +103,181 @@ class RealWorldParquet(ParquetDatasetFormatter):
         df = pl.DataFrame(files)
         return df
 
-    def read_csv_in_zip(self, zip_file: str, csv_file: str) -> pl.DataFrame:
+    def get_info_from_session_file(self, zip_path: str) -> tuple:
+        """
+        Get info from ZIP data file path
 
+        Args:
+            zip_path: path to zip data file
+
+        Returns:
+            a tuple of 3 elements: subject ID (int), label (int), zip file split number (str)
+        """
+        search_text = zip_path.removeprefix(self.raw_folder)
+        info = re.search(
+            rf'proband([0-9]*)/data/[a-z]{{3}}_({"|".join(RealWorldConst.CLASS_LABELS)})_([1-3]?)_?csv.zip',
+            search_text
+        )
+        subject_id, text_label, zip_file_split = tuple(info.group(i) for i in range(1, 4))
+
+        subject_id = int(subject_id)
+        idx_label = RealWorldConst.CLASS_LABELS.index(text_label)
+        return subject_id, idx_label, zip_file_split
+
+    def read_csv_in_zip(self, zip_path: str) -> dict:
+        """
+        Read all csv files in a zip file
+
+        Args:
+            zip_path: path to zip file
+
+        Returns:
+            dict with:
+                - key: sensor position (chest, waist, ...)
+                - value: corresponding DF
+        """
+        result = {}
+
+        # read all csv files in zip file
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            compressed_list = [item for item in zf.namelist() if item.endswith('.csv')]
+
+            # for each csv file in the zip file
+            for csv_file in compressed_list:
+                sensor_pos = csv_file.split('_')[-1].removesuffix('.csv')
+                assert sensor_pos in RealWorldConst.SENSOR_POSITION, (f'Unexpected sensor position: {sensor_pos}; '
+                                                                      f'Expected: {RealWorldConst.SENSOR_POSITION}')
+                if sensor_pos in self.sensor_pos:
+                    result[sensor_pos] = pl.read_csv(zf.read(csv_file))
+
+        # clean up DFs
+        sub_modal = zip_path.split('/')[-1].split('_')[0]
+        if sub_modal in RealWorldConst.SUBMODAL_SI_UNIT:
+            # both acc and gyr are already in SI units, no need to convert
+            unit = RealWorldConst.SUBMODAL_SI_UNIT[sub_modal]
+            for sensor_pos, df in result.items():
+                result[sensor_pos] = df.select(
+                    pl.col('attr_time').alias('timestamp(ms)'),
+                    pl.col('attr_x').alias(f'{sensor_pos}_{sub_modal}_x({unit})'),
+                    pl.col('attr_y').alias(f'{sensor_pos}_{sub_modal}_y({unit})'),
+                    pl.col('attr_z').alias(f'{sensor_pos}_{sub_modal}_z({unit})')
+                )
+        else:
+            raise ValueError(f'Unsupported sub-modal: {sub_modal}')
+        return result
+
+    def split_session_to_segments(self, all_dfs_of_session: dict) -> list:
+        """
+        Split a session into uninterrupted segments
+
+        Args:
+            all_dfs_of_session: a 2-level dict: dict[submodal][sensor position] = raw DF
+
+        Returns:
+            list of 1-level dicts, each dict has this format: dict[{submodal}_{sensor position}] = DF
+        """
+        # convert 2-level dict to 1-level dict
+        all_dfs_of_session = {f'{submodal}_{sensor_pos}': df
+                              for submodal in all_dfs_of_session.keys()
+                              for sensor_pos, df in all_dfs_of_session[submodal].items()}
+
+        # split into uninterrupted segments
+        max_interval = {key: self.max_interval[key.split('_')[0]] for key in all_dfs_of_session.keys()}
+        sampling_rates = {key: self.sampling_rates[self.submodal_2_modal[key.split('_')[0]]]
+                          for key in all_dfs_of_session.keys()}
+        segments = split_interrupted_dfs(dfs=all_dfs_of_session, max_interval=max_interval,
+                                         min_length_segment=self.min_length_segment, sampling_rates=sampling_rates)
+        return segments
+
+    def concat_submodals_to_modal(self, data_dict: Dict[str, pl.DataFrame]) -> dict:
+        """
+        Concatenate DFs of submodals into DFs of modal;
+        Example: concat [acc, gyr] => inertia
+
+        Args:
+            data_dict: a dict with format: dict[{submodal}_{sensor position}] = DF
+
+        Returns:
+            a dict with format: dict[modal] = DF
+        """
+        dfs = defaultdict(list)
+        # for each submodal
+        for submodal, df in data_dict.items():
+            modal = self.submodal_2_modal[submodal.split('_')[0]]
+
+            # only keep ts column for 1 DF of each submodal to avoid duplicate column name during concatenation
+            if len(dfs[modal]):
+                df = df.drop('timestamp(ms)')
+            dfs[modal].append(df)
+
+        # concat DFs with the same sensor type, add label column
+        dfs = {sensor: pl.concat(list_dfs, how='horizontal') for sensor, list_dfs in dfs.items()}
+        return dfs
+
+    def add_label_col(self, data_dict: Dict[str, pl.DataFrame], label: any) -> dict:
+        """
+        Add a `label` column with only 1 value to each DF in the input
+
+        Args:
+            data_dict: data_dict: a dict with format: dict[modal] = DF
+            label: label value
+
+        Returns:
+            same as input dict, but each DF inside has a new `label` column
+        """
+        data_dict = {key: val.with_columns(pl.Series(name='label', values=[label] * len(val)))
+                     for key, val in data_dict.items()}
+        return data_dict
 
     def run(self):
+        unique_modals = set(self.submodal_2_modal.values())
+
         # scan all sessions
+        logger.info('Scanning for sessions...')
         list_sessions = self.get_list_sessions()
+        logger.info(f'Found {len(list_sessions)} sessions in total')
 
+        skipped_sessions = 0
+        written_files = 0
         # for each session
-        for session_modals in list_sessions.iter_rows():
+        for session_row in list_sessions.iter_rows(named=True):
+            # get session info
+            subject_id, idx_label, zip_file_split = self.get_info_from_session_file(next(iter(session_row.values())))
+            session_info = f's{subject_id}_l{idx_label}_z{zip_file_split}'
 
-            # for each raw modal zip file of the session
-            for submodal_file in session_modals:
-                with zipfile.ZipFile(submodal_file, 'r') as zf:
-                    compressed_list = [item for item in zf.namelist() if item.endswith('.csv')]
+            # check if already run before
+            if all(os.path.isfile(self.get_output_file_path(modal, subject_id, session_info))
+                   for modal in unique_modals):
+                logger.info(f'Skipping session {session_info} because already run before')
+                skipped_sessions += 1
+                continue
+            logger.info(f'Starting session {session_info}')
 
-                    # for each device csv file in the zip file
-                    for csv_file in compressed_list:
-                        modal_device_df = pl.read_csv(zf.read(csv_file))
+            # a 2-level dict: dict[submodal][sensor position] = raw DF
+            all_dfs_of_session = {}
+            # read all submodal files of this session
+            for submodal, submodal_file in session_row.items():
+                all_dfs_of_session[submodal] = self.read_csv_in_zip(submodal_file)
 
-                        _ = 1
+            # split a session (which may be interrupted), into uninterrupted segments
+            segments = self.split_session_to_segments(all_dfs_of_session)
 
-        # # write
-        # skipped_sessions = 0
-        # written_files = 0
-        # # for each session
-        # for session in whole_dataset:
-        #     # get session info
-        #     subject = session['subject']
-        #     activity = session['activity']
-        #     trial = session['trial']
-        #     device = '-'.join(session['device'])
-        #     session_info = f'subject{subject}_act{activity}_trial{trial}_device{device}'
-        #
-        #     # check if already run before
-        #     if os.path.isfile(self.get_output_file_path(RealWorldConst.MODAL_INERTIA, subject, session_info)):
-        #         logger.info(f'Skipping session {session_info} because already run before')
-        #         skipped_sessions += 1
-        #         continue
-        #     logger.info(f'Starting session {session_info}')
-        #
-        #     # get data DF
-        #     data_df = session['data']
-        #     # add timestamp and label
-        #     data_df = self.add_ts_and_label(data_df, activity)
-        #
-        #     # write file
-        #     if self.write_output_parquet(data_df, RealWorldConst.MODAL_INERTIA, subject, session_info):
-        #         written_files += 1
-        #
-        # logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
+            # for each segment
+            for seg in segments:
+                # concat submodal DFs into modal DF
+                seg = self.concat_submodals_to_modal(seg)
+                # add label column to DFs (each session has only 1 label)
+                seg = self.add_label_col(seg, idx_label)
+
+                # write to files
+                for modal, df in seg.items():
+                    if self.write_output_parquet(df, modal, subject_id, session_info):
+                        written_files += 1
+
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
 
 
 class RealWorldNpyWindow(NpyWindowFormatter):
-    def get_parquet_file_list(self) -> pl.DataFrame:
-        """
-        Override parent class method to filter out sessions that don't have required inertial sub-modals
-        """
-        df = super().get_parquet_file_list()
-        if RealWorldConst.MODAL_INERTIA not in df.columns:
-            return df
-
-        sub_modals = np.unique([
-            col.split('_')[0]
-            for col in np.concatenate(list(self.modal_cols[RealWorldConst.MODAL_INERTIA].values()))
-        ])
-        df = df.filter(pl.all(
-            pl.col(RealWorldConst.MODAL_INERTIA).str.contains(submodal)
-            for submodal in sub_modals
-        ))
-        return df
-
     def run(self, shift_short_activity: bool = True) -> pd.DataFrame:
         """
 
@@ -143,39 +296,31 @@ class RealWorldNpyWindow(NpyWindowFormatter):
             # get session info
             modal, subject, session_id = self.get_parquet_session_info(list(parquet_session.values())[0])
 
-            session_label = int(re.search(r'_act([0-9]*)_', session_id).group(1))
-            # 0: non-fall; 1: fall
-            session_label = session_label >= 100
-
-            session_result = self.parquet_to_windows(
-                parquet_session=parquet_session, subject=subject, session_label=int(session_label),
-                is_short_activity=session_label if shift_short_activity else False
-            )
+            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
             result.append(session_result)
         result = pd.DataFrame(result)
         return result
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/RealWorld'
+    parquet_dir = '/mnt/data_drive/projects/processed_parquet/RealWorld'
 
-    RealWorldParquet(
-        raw_folder='/mnt/data_drive/projects/raw datasets/realworld2016_dataset',
-        destination_folder=parquet_dir,
-        sampling_rates={RealWorldConst.MODAL_INERTIA: 50}
-    ).run()
-
-    # dataset_window = RealWorldNpyWindow(
-    #     parquet_root_dir=parquet_dir,
-    #     window_size_sec=4,
-    #     step_size_sec=2,
-    #     min_step_size_sec=0.5,
-    #     max_short_window=5,
-    #     modal_cols={
-    #         RealWorldConst.MODAL_INERTIA: {
-    #             'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)'],
-    #             'wrist': ['wrist_acc_x(m/s^2)', 'wrist_acc_y(m/s^2)', 'wrist_acc_z(m/s^2)']
-    #         }
-    #     }
+    # RealWorldParquet(
+    #     raw_folder='/mnt/data_drive/projects/raw datasets/realworld2016_dataset',
+    #     destination_folder=parquet_dir,
+    #     sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
+    #     used_modals={RealWorldConst.MODAL_INERTIA: ['acc', 'gyr']},
+    #     sensor_pos=['waist']
     # ).run()
-    _ = 1
+
+    dataset_window = RealWorldNpyWindow(
+        parquet_root_dir=parquet_dir,
+        window_size_sec=4,
+        step_size_sec=2,
+        modal_cols={
+            RealWorldConst.MODAL_INERTIA: {
+                'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)']
+            }
+        }
+    ).run()
+    _=1
