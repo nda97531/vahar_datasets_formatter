@@ -77,7 +77,7 @@ CMDFallConst.define_att()
 class CMDFallParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  min_length_segment: float = 10,
-                 use_accelerometer: list = [155], use_kinect: list = [3]):
+                 use_accelerometer: list = [155]):
         """
         Class for processing CMDFall dataset.
         Use only Inertial sensors and Camera 3.
@@ -88,18 +88,14 @@ class CMDFallParquet(ParquetDatasetFormatter):
         Args:
             min_length_segment: only write segments longer than this threshold (unit: sec)
             use_accelerometer: inertial sensor IDs
-            use_kinect: kinect device IDs; frame index info is read from the first one in this list
         """
         assert len(use_accelerometer), 'No accelerometer is used?'
-        assert len(use_kinect), 'No kinect is used? Label info is stored in skeleton files.'
-        super().__init__(raw_folder, destination_folder, sampling_rates)
-
         assert len(set(use_accelerometer) - {1, 155}) == 0, 'Invalid inertial sensor ID. Allowed: [1, 155]'
-        assert len(set(use_kinect) - set(range(1, 8))) == 0, f'Invalid Kinect ID. Allowed: {list(range(1, 8))}'
+        super().__init__(raw_folder, destination_folder, sampling_rates)
 
         self.min_length_segment = min_length_segment * 1000
         self.use_accelerometer = use_accelerometer
-        self.use_kinect = use_kinect
+        self.use_kinect = [3]
 
         # if actual interval > expected interval * this coef; it's considered an interruption and DF will be split
         max_interval_coef = 4
@@ -111,7 +107,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
 
         # read annotation file
         anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
-        self.anno_df = anno_df.filter(pl.col('kinect_id') == use_kinect[0])
+        self.anno_df = anno_df.filter(pl.col('kinect_id') == self.use_kinect[0])
 
     def scan_data_files(self) -> pd.DataFrame:
         """
