@@ -1,6 +1,7 @@
-# har_datasets
+# VAHAR - formatter for HAR datasets
 
-This code processes HAR timeseries datasets to the same format for easier usage. The file `example.py` shows a usage example.  
+This code processes HAR timeseries datasets to the same format for easier usage. The file `example.py` shows a usage
+example.
 
 ## Directory tree of the formatted dataset
 
@@ -19,7 +20,7 @@ Columns:
 
 ## Supported datasets
 
-| Dataset                                                                                                                  | Modalities                                                                                                                                                                                                                                                                                                                 |
+| Dataset                                                                                                                  | Supported modalities                                                                                                                                                                                                                                                                                                       |
 |--------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | [CMDFall](http://mica.edu.vn:8000/KinectData/public/)                                                                    | inertia (2 accelerometers), skeleton (normalised 3D pose from Kinect 3)                                                                                                                                                                                                                                                    |
 | [FallAllD](https://ieee-dataport.org/open-access/fallalld-comprehensive-dataset-human-falls-and-activities-daily-living) | inertia (acc and gyro)                                                                                                                                                                                                                                                                                                     |
