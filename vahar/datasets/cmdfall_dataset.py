@@ -12,9 +12,9 @@ from transforms3d.axangles import axangle2mat
 from my_py_utils.my_py_utils.string_utils import rreplace
 
 if __name__ == '__main__':
-    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
-    from har_datasets.constant import G_TO_MS2
-    from har_datasets.modal_sync import split_interrupted_dfs
+    from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from vahar.constant import G_TO_MS2
+    from vahar.modal_sync import split_interrupted_dfs
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..constant import G_TO_MS2

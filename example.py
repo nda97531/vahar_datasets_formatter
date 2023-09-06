@@ -1,4 +1,4 @@
-from har_datasets.datasets.sfu_dataset import SFUParquet, SFUConst, SFUNpyWindow
+from vahar.datasets.sfu_dataset import SFUParquet, SFUConst, SFUNpyWindow
 
 smu_parquet_folder = 'parquet_dataset/SFU-IMU'
 

@@ -9,7 +9,7 @@ from glob import glob
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
 
 if __name__ == '__main__':
-    from har_datasets.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
 
