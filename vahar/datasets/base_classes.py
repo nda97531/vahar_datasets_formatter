@@ -197,6 +197,8 @@ class NpyWindowFormatter:
             result.append(session_dict)
 
         parquet_files = pl.DataFrame(result)
+        logger.info(f'Found {len(parquet_files)} parquets file(s).')
+        assert len(parquet_files), 'Cannot find any parquet file, please check data path.'
         return parquet_files
 
     def get_parquet_session_info(self, parquet_path: str) -> Tuple[str, ...]:
