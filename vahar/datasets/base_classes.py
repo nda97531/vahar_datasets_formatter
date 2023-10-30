@@ -90,7 +90,9 @@ class ParquetDatasetFormatter:
         """
         Main processing method
         """
-        # to override: process data of any dataset and call self.write_output_parquet() for every modal of every session
+        # to override: process data of any dataset and
+        # 1. call self.get_output_file_path to check if session has already been processed
+        # 2. call self.write_output_parquet() for every modal of every session
         raise NotImplementedError()
 
 
@@ -161,9 +163,13 @@ class NpyWindowFormatter:
         modals = [p.removesuffix('/').split('/')[-1] for p in modal_folders]
         return modals
 
-    def get_parquet_file_list(self) -> pl.DataFrame:
+    def get_parquet_file_list(self, subject_pattern: str = '*', session_pattern: str = '*') -> pl.DataFrame:
         """
         Scan all parquet files in the root dir
+
+        Args:
+            subject_pattern: wildcard string for subject ID
+            session_pattern: wildcard string for session ID
 
         Returns:
             a DataFrame, each column is a data modality, each row is a session, cells are paths to parquet files
@@ -173,7 +179,7 @@ class NpyWindowFormatter:
         # glob first modal
         first_modal_parquets = sorted(glob(PARQUET_PATH_PATTERN.format(
             root=self.parquet_root_dir,
-            modal=modals[0], subject='*', session='*'
+            modal=modals[0], subject=subject_pattern, session=session_pattern
         )))
         if len(modals) == 1:
             return pl.DataFrame({modals[0]: first_modal_parquets})
@@ -182,7 +188,7 @@ class NpyWindowFormatter:
         for modal in modals[1:]:
             next_modal_parquets = glob(PARQUET_PATH_PATTERN.format(
                 root=self.parquet_root_dir,
-                modal=modal, subject='*', session='*'
+                modal=modal, subject=subject_pattern, session=session_pattern
             ))
             assert len(first_modal_parquets) == len(next_modal_parquets), \
                 f'{modals[0]} has {len(first_modal_parquets)} parquet files but {modal} has {len(next_modal_parquets)}'
