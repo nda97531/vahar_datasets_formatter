@@ -1,19 +1,16 @@
 import os
-import re
 from typing import List
-
-import numpy as np
 import pandas as pd
 import polars as pl
 from loguru import logger
 from glob import glob
-from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as resample_df
-from vahar.modal_sync import split_interrupted_dfs
 
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from vahar.modal_sync import split_interrupted_dfs
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
+    from ..modal_sync import split_interrupted_dfs
 
 
 class Pamap2Const:
