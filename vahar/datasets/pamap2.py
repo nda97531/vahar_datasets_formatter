@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Tuple, Dict
 import pandas as pd
 import polars as pl
 from loguru import logger
@@ -14,10 +14,11 @@ else:
 
 
 class Pamap2Const:
-    MODAL = 'inertia'
+    INERTIA_MODAL = 'inertia'
+    HEARTRATE_MODAL = 'heartrate'
     RAW_COL_DTYPES = {'timestamp(s)': float, 'label': int, 'heart_rate(bpm)': float}
-    SELECTED_COLS = ['timestamp(ms)', 'label']
-    RAW_INERTIA_FREQ = 100
+    SELECTED_HEARTRATE_COLS = ['timestamp(ms)', 'label', 'heart_rate(bpm)']
+    SELECTED_IMU_COLS = ['timestamp(ms)', 'label']
 
     @classmethod
     def define_att(cls):
@@ -40,9 +41,9 @@ class Pamap2Const:
         cls.RAW_COL_DTYPES.update({f'{position}_{imu}': float
                                    for position in positions
                                    for imu in imu_cols})
-        cls.SELECTED_COLS += [f'{position}_{imu}'
-                              for position in positions
-                              for imu in selected_imu_cols]
+        cls.SELECTED_IMU_COLS += [f'{position}_{imu}'
+                                  for position in positions
+                                  for imu in selected_imu_cols]
 
 
 Pamap2Const.define_att()
@@ -50,11 +51,12 @@ Pamap2Const.define_att()
 
 class Pamap2Parquet(ParquetDatasetFormatter):
     def __init__(self, *args, **kwargs):
-        assert 'heart_rate(bpm)' not in Pamap2Const.SELECTED_COLS, 'heart_rate(bpm) is not yet supported'
-
         super().__init__(*args, **kwargs)
         # max gap within an uninterrupted session; unit ms
-        self.max_interval = {Pamap2Const.MODAL: 100}
+        self.max_interval = {
+            Pamap2Const.INERTIA_MODAL: 100,
+            Pamap2Const.HEARTRATE_MODAL: 900
+        }
         # drop session shorter than this; unit ms
         self.min_length_segment = 10000
 
@@ -79,56 +81,64 @@ class Pamap2Parquet(ParquetDatasetFormatter):
 
         return subset, subject
 
-    def read_raw_df(self, path: str) -> pl.DataFrame:
+    def read_raw_df(self, path: str) -> Dict[str, pl.DataFrame]:
         """
-        Read raw data file into a DF and format the data
+        Read raw data file into 2 DFs for IMU and heartrate and format the data
 
         Args:
             path: file path
 
         Returns:
-            polars DF
+            a dict: {'inertia': IMU DF, 'heartrate': heartrate DF}
         """
         # read data
         df = pl.read_csv(path, has_header=False, separator=' ', new_columns=Pamap2Const.RAW_COL_DTYPES,
                          dtypes=Pamap2Const.RAW_COL_DTYPES)
         df = df.with_columns((pl.col('timestamp(s)') * 1000).cast(int).alias('timestamp(ms)'))
-        df = df.select(Pamap2Const.SELECTED_COLS)
         df = df.set_sorted('timestamp(ms)')
+        # replace NAN with Null
+        df = df.fill_nan(None)
 
-        return df
+        imu_df = df.select(Pamap2Const.SELECTED_IMU_COLS)
+        heartrate_df = df.select(Pamap2Const.SELECTED_HEARTRATE_COLS)
 
-    def split_sessions(self, df: pl.DataFrame) -> List[pl.DataFrame]:
+        # drop NAN rows
+        imu_df = imu_df.drop_nulls()
+        heartrate_df = heartrate_df.drop_nulls()
+
+        return {Pamap2Const.INERTIA_MODAL: imu_df, Pamap2Const.HEARTRATE_MODAL: heartrate_df}
+
+    def split_sessions(self, dfs: Dict[str, pl.DataFrame]) -> list:
         """
         Split a DF into uninterrupted DFs
 
         Args:
-            df: original dataframe
+            dfs: dict with keys are modal names, values are original dataframes
 
         Returns:
-            list of uninterrupted dataframes
+            list of dicts, each dict has the format:
+                - key: modal name
+                - value: uninterrupted dataframe
         """
         # move label to a separate DF
-        data_df = df.drop('label')
-        label_df = df.select(['timestamp(ms)', 'label']).set_sorted('timestamp(ms)')
-        del df
-
-        # drop NAN rows
-        data_df = data_df.fill_nan(None)
-        data_df = data_df.drop_nulls()
+        data_dfs = {modal: modal_df.drop('label') for modal, modal_df in dfs.items()}
+        label_dfs = {modal: modal_df.select(['timestamp(ms)', 'label']).set_sorted('timestamp(ms)')
+                     for modal, modal_df in dfs.items()}
+        del dfs
 
         # split DF where there are big gaps
         data_dfs = split_interrupted_dfs(
-            dfs={Pamap2Const.MODAL: data_df}, max_interval=self.max_interval,
+            dfs=data_dfs, max_interval=self.max_interval,
             min_length_segment=self.min_length_segment, sampling_rates=self.sampling_rates
         )
-        del data_df
-        data_dfs = [df[Pamap2Const.MODAL] for df in data_dfs]
 
         # match label with resampled data
-        dfs = [df.join_asof(label_df, on='timestamp(ms)', strategy='nearest')
-               for df in data_dfs]
-        return dfs
+        for i, data_df_dict in enumerate(data_dfs):
+            data_dfs[i] = {
+                modal: data_df.join_asof(label_dfs[modal], on='timestamp(ms)', strategy='nearest')
+                for modal, data_df in data_df_dict.items()
+            }
+        return data_dfs
 
     def run(self):
         session_files = sorted(glob(f'{self.raw_folder}/*/subject*.dat'))
@@ -138,15 +148,18 @@ class Pamap2Parquet(ParquetDatasetFormatter):
             subset, subject = self.get_session_info(session_file)
             logger.info(f'Processing subject {subject}, session {subset}')
 
-            output_path = self.get_output_file_path(Pamap2Const.MODAL, subject, subset)
-            if os.path.isfile(output_path):
+            imu_output_path = self.get_output_file_path(Pamap2Const.INERTIA_MODAL, subject, subset)
+            hr_output_path = self.get_output_file_path(Pamap2Const.HEARTRATE_MODAL, subject, subset)
+            if os.path.isfile(imu_output_path) and os.path.isfile(hr_output_path):
                 logger.info(f'Skipping because already run before')
                 continue
 
-            uninterrupted_dfs = self.split_sessions(self.read_raw_df(session_file))
-            for i, uninterrupted_df in enumerate(uninterrupted_dfs):
-                write_path = f'{subset}_{i}' if (i != len(uninterrupted_dfs) - 1) else subset
-                self.write_output_parquet(uninterrupted_df, Pamap2Const.MODAL, subject, write_path)
+            dfs = self.read_raw_df(session_file)
+            dfs = self.split_sessions(dfs)
+            for i, modal_dfs in enumerate(dfs):
+                write_name = f'{subset}_{i}' if (i != len(dfs) - 1) else subset
+                for modal in [Pamap2Const.INERTIA_MODAL, Pamap2Const.HEARTRATE_MODAL]:
+                    self.write_output_parquet(modal_dfs[modal], modal, subject, write_name)
 
 
 class Pamap2NpyWindow(NpyWindowFormatter):
@@ -175,14 +188,13 @@ class Pamap2NpyWindow(NpyWindowFormatter):
                 - '<modality 2>': ...
                 - 'label': array shape [num window]
         """
-        list_sessions = self.get_parquet_file_list(session_pattern='Protocol*' if self.only_protocol else '*')
-        list_sessions = list_sessions[Pamap2Const.MODAL].to_list()
+        parquet_sessions = self.get_parquet_file_list(session_pattern='Protocol*' if self.only_protocol else '*')
 
         result = []
-        for session_file in list_sessions:
-            modal, subject, session = self.get_parquet_session_info(session_file)
+        for parquet_session in parquet_sessions.iter_rows(named=True):
+            _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
 
-            session_data = self.parquet_to_windows(parquet_session={modal: session_file}, subject=subject)
+            session_data = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
             result.append(session_data)
 
         result = pd.DataFrame(result)
@@ -195,7 +207,7 @@ if __name__ == '__main__':
     # pamap2parquet = Pamap2Parquet(
     #     raw_folder='/mnt/data_drive/projects/raw datasets/PAMAP2_Dataset/',
     #     destination_folder=parquet_folder,
-    #     sampling_rates={Pamap2Const.MODAL: 50}
+    #     sampling_rates={Pamap2Const.INERTIA_MODAL: 50, Pamap2Const.HEARTRATE_MODAL: 10}
     # )
     # pamap2parquet.run()
 
@@ -208,12 +220,18 @@ if __name__ == '__main__':
         parquet_root_dir=parquet_folder,
         window_size_sec=5.12,
         step_size_sec=2.56,
-        exclude_labels=[0],
-        no_transition=False,
         modal_cols={
-            Pamap2Const.MODAL: {
-                'acc': [f'{pos}_{axis_col}' for pos in positions for axis_col in acc_cols],
-                'gyro': [f'{pos}_{axis_col}' for pos in positions for axis_col in gyro_cols]
+            Pamap2Const.INERTIA_MODAL: {
+                'chest_acc': ['chest_acc_x(m/s^2)', 'chest_acc_y(m/s^2)', 'chest_acc_z(m/s^2)'],
+                'hand_acc': ['hand_acc_x(m/s^2)', 'hand_acc_y(m/s^2)', 'hand_acc_z(m/s^2)'],
+                'ankle_acc': ['ankle_acc_x(m/s^2)', 'ankle_acc_y(m/s^2)', 'ankle_acc_z(m/s^2)'],
+                'chest_mag': ['chest_mag_x(uT)', 'chest_mag_y(uT)', 'chest_mag_z(uT)'],
+                'hand_mag': ['hand_mag_x(uT)', 'hand_mag_y(uT)', 'hand_mag_z(uT)'],
+                'ankle_mag': ['ankle_mag_x(uT)', 'ankle_mag_y(uT)', 'ankle_mag_z(uT)']
+            },
+            Pamap2Const.HEARTRATE_MODAL: {
+                'hr': ['heart_rate(bpm)']
             }
         }
     ).run()
+    _ = 1
