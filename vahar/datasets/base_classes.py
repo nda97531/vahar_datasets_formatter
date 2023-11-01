@@ -291,16 +291,16 @@ class NpyWindowFormatter:
             # vote 1 label for each window
             windows_label = windows[:, :, df.columns.index('label')].astype(int)
 
-            if len(self.exclude_labels):
-                # drop windows containing disallowed labels
-                keep_idx = ~np.array([any(lb in row for lb in self.exclude_labels) for row in windows_label])
-                windows = windows[keep_idx]
-                windows_label = windows_label[keep_idx]
             if self.no_transition:
                 # drop windows containing label transitions
                 no_trans_idx = np.array([len(np.unique(windows_label[i])) == 1 for i in range(len(windows_label))])
                 windows = windows[no_trans_idx]
                 windows_label = windows_label[no_trans_idx]
+            if len(self.exclude_labels):
+                # drop windows containing disallowed labels
+                keep_idx = ~np.array([any(lb in row for lb in self.exclude_labels) for row in windows_label])
+                windows = windows[keep_idx]
+                windows_label = windows_label[keep_idx]
 
             windows_label = mode(windows_label, axis=-1, nan_policy='raise', keepdims=False).mode
 
