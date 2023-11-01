@@ -278,15 +278,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
 
 
 class RealWorldNpyWindow(NpyWindowFormatter):
-    def run(self, shift_short_activity: bool = True) -> pd.DataFrame:
-        """
-
-        Args:
-            shift_short_activity: whether to run shifting windows on fall sessions (or just run normal sliding window)
-
-        Returns:
-            please see parent class's method
-        """
+    def run(self) -> pd.DataFrame:
         # get list of parquet files
         parquet_sessions = self.get_parquet_file_list()
 

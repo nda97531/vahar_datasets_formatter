@@ -31,7 +31,9 @@ class Pamap2Const:
         ]
         selected_imu_cols = [
             'acc_x(m/s^2)', 'acc_y(m/s^2)', 'acc_z(m/s^2)',
-            'gyro_x(rad/s)', 'gyro_y(rad/s)', 'gyro_z(rad/s)'
+            'gyro_x(rad/s)', 'gyro_y(rad/s)', 'gyro_z(rad/s)',
+            'mag_x(uT)', 'mag_y(uT)', 'mag_z(uT)',
+            'orientation_x(invalid)', 'orientation_y(invalid)', 'orientation_z(invalid)', 'orientation_w(invalid)'
         ]
         positions = ['hand', 'chest', 'ankle']
 
@@ -148,8 +150,7 @@ class Pamap2Parquet(ParquetDatasetFormatter):
 
 
 class Pamap2NpyWindow(NpyWindowFormatter):
-    def __init__(self, only_protocol: bool, parquet_root_dir: str, window_size_sec: float, step_size_sec: float,
-                 modal_cols: dict = None):
+    def __init__(self, only_protocol: bool, *args, **kwargs):
         """
         Run sliding window on Pamap 2
 
@@ -160,7 +161,7 @@ class Pamap2NpyWindow(NpyWindowFormatter):
             step_size_sec:
             modal_cols:
         """
-        super().__init__(parquet_root_dir, window_size_sec, step_size_sec, modal_cols=modal_cols)
+        super().__init__(*args, **kwargs)
         self.only_protocol = only_protocol
 
     def run(self) -> pd.DataFrame:
@@ -206,7 +207,9 @@ if __name__ == '__main__':
         only_protocol=True,
         parquet_root_dir=parquet_folder,
         window_size_sec=5.12,
-        step_size_sec=1,
+        step_size_sec=2.56,
+        exclude_labels=[0],
+        no_transition=False,
         modal_cols={
             Pamap2Const.MODAL: {
                 'acc': [f'{pos}_{axis_col}' for pos in positions for axis_col in acc_cols],

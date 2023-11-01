@@ -100,6 +100,7 @@ class NpyWindowFormatter:
     def __init__(self, parquet_root_dir: str,
                  window_size_sec: float, step_size_sec: float,
                  min_step_size_sec: float = None, max_short_window: int = None,
+                 exclude_labels: tuple = (), no_transition: bool = False,
                  modal_cols: dict = None):
         """
         This class takes result of `ParquetDatasetFormatter`, run sliding window and return as numpy array.
@@ -113,6 +114,10 @@ class NpyWindowFormatter:
             step_size_sec: step size in second
             min_step_size_sec: for short activity sessions, this is used as minimum step size (in shifting window)
             max_short_window: max number of window for short activity sessions (use shifting window)
+            exclude_labels: drop any window containing one of these labels BEFORE voting a label for each window;
+                not applicable for short activity sessions
+            no_transition: if True, drop any window with more than 1 label before voting a label for each window;
+                not applicable for short activity sessions
             modal_cols: a 2-level dict;
                 1st level key is modal name (match with modal name in parquet file path),
                 2nd level key is sub-modal names from the same parquet files (any new name),
@@ -136,6 +141,9 @@ class NpyWindowFormatter:
         self.step_size_sec = step_size_sec
         self.min_step_size_sec = min_step_size_sec
         self.max_short_window = max_short_window
+        self.no_transition = no_transition
+        self.exclude_labels = np.array(exclude_labels)
+        assert len(exclude_labels) == len(self.exclude_labels)
 
         # standardise `modal_cols`
         # compose dict of used columns if it has not already been defined
@@ -282,6 +290,18 @@ class NpyWindowFormatter:
 
             # vote 1 label for each window
             windows_label = windows[:, :, df.columns.index('label')].astype(int)
+
+            if len(self.exclude_labels):
+                # drop windows containing disallowed labels
+                keep_idx = ~np.array([any(lb in row for lb in self.exclude_labels) for row in windows_label])
+                windows = windows[keep_idx]
+                windows_label = windows_label[keep_idx]
+            if self.no_transition:
+                # drop windows containing label transitions
+                no_trans_idx = np.array([len(np.unique(windows_label[i])) == 1 for i in range(len(windows_label))])
+                windows = windows[no_trans_idx]
+                windows_label = windows_label[no_trans_idx]
+
             windows_label = mode(windows_label, axis=-1, nan_policy='raise', keepdims=False).mode
 
         # list of sub-modals within the DF
