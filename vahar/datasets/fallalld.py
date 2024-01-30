@@ -213,7 +213,7 @@ class FallAllDNpyWindow(NpyWindowFormatter):
             col.split('_')[0]
             for col in np.concatenate(list(self.modal_cols[FallAllDConst.MODAL_INERTIA].values()))
         ])
-        df = df.filter(pl.all(
+        df = df.filter(pl.all_horizontal(
             pl.col(FallAllDConst.MODAL_INERTIA).str.contains(submodal)
             for submodal in sub_modals
         ))
