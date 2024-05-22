@@ -44,7 +44,7 @@ RealWorldConst.define_att()
 
 class RealWorldParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
-                 used_modals: dict = {'inertia': ['acc', 'gyr']}, sensor_pos: list = ('waist',),
+                 used_modals: dict = None, sensor_pos: list = ('waist',),
                  min_length_segment: float = 10, max_interval: dict = None):
         """
         Class for RealWorld2016 dataset.
@@ -59,12 +59,17 @@ class RealWorldParquet(ParquetDatasetFormatter):
                 - value: sampling rate (unit: Hz)
             used_modals: a dict containing sub-modal names of each modal
                 - key: modal name (any name), this will be used in output paths
-                - value: list of sub-modal names, choices are in RealWorldConst.RAW_MODALS
+                - value: list of sub-modal names, choices are in RealWorldConst.RAW_MODALS.
+                Default: {'inertia': ['acc', 'gyr']}
             sensor_pos: list of sensor positions to take
                 (don't use all by default to avoid more interruptions in session)
             min_length_segment: only write segments longer than this threshold (unit: sec)
-            max_interval: dict[submodal] = maximum intervals (millisecond) between rows of an uninterrupted segment
+            max_interval: dict[submodal] = maximum intervals (millisecond) between rows of an uninterrupted segment;
+                default = 500 ms
         """
+        used_modals = {'inertia': ['acc', 'gyr']} if used_modals is None else used_modals
+        max_interval = {'acc': 500, 'gyr': 500} if max_interval is None else max_interval
+
         all_submodals = np.concatenate(list(used_modals.values()))
         assert len(set(all_submodals) - set(RealWorldConst.RAW_MODALS)) == 0, \
             (f'Invalid raw modal: {set(all_submodals) - set(RealWorldConst.RAW_MODALS)}; '
@@ -82,10 +87,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
         self.submodal_2_modal = {submodal: modal
                                  for modal in used_modals
                                  for submodal in used_modals[modal]}
-        self.max_interval = {'acc': 500, 'gyr': 500}
-        if max_interval:
-            max_interval = {k: v * 1000 for k, v in max_interval.items()}
-            self.max_interval.update(max_interval)
+        self.max_interval = max_interval
 
     def get_list_sessions(self) -> pl.DataFrame:
         """
@@ -94,11 +96,12 @@ class RealWorldParquet(ParquetDatasetFormatter):
         Returns:
             a DF, each row is a session, columns are sub-modal names, each cell contains a file path
         """
-        first_submodal = RealWorldConst.RAW_MODALS[0]
+        list_submodals = list(self.submodal_2_modal)
+        first_submodal = list_submodals[0]
         files = {
             first_submodal: sorted(glob(f'{self.raw_folder}/proband*/data/{first_submodal}_*_csv.zip'))
         }
-        for sub_modal in RealWorldConst.RAW_MODALS[1:]:
+        for sub_modal in list_submodals[1:]:
             files[sub_modal] = [rreplace(f, first_submodal, sub_modal) for f in files[first_submodal]]
         df = pl.DataFrame(files)
         return df
@@ -246,7 +249,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
             session_info = f's{subject_id}_l{idx_label}_z{zip_file_split}'
 
             # check if already run before
-            if all(os.path.isfile(self.get_output_file_path(modal, subject_id, session_info))
+            if all(os.path.isfile(self.get_output_file_path(modal, subject_id, f'{session_info}_segmentlast'))
                    for modal in unique_modals):
                 logger.info(f'Skipping session {session_info} because already run before')
                 skipped_sessions += 1
@@ -263,15 +266,20 @@ class RealWorldParquet(ParquetDatasetFormatter):
             segments = self.split_session_to_segments(all_dfs_of_session)
 
             # for each segment
-            for seg in segments:
+            for seg_i, seg in enumerate(segments):
                 # concat submodal DFs into modal DF
                 seg = self.concat_submodals_to_modal(seg)
                 # add label column to DFs (each session has only 1 label)
                 seg = self.add_label_col(seg, idx_label)
 
+                # number the segments, mark the last one
+                if seg_i == len(segments) - 1:
+                    seg_i = 'last'
+                write_name = f'{session_info}_segment{seg_i}'
+
                 # write to files
                 for modal, df in seg.items():
-                    if self.write_output_parquet(df, modal, subject_id, session_info):
+                    if self.write_output_parquet(df, modal, subject_id, write_name):
                         written_files += 1
 
         logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
@@ -295,24 +303,24 @@ class RealWorldNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/processed_parquet/RealWorld'
+    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/RealWorld'
 
-    # RealWorldParquet(
-    #     raw_folder='/mnt/data_drive/projects/raw datasets/realworld2016_dataset',
-    #     destination_folder=parquet_dir,
-    #     sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
-    #     used_modals={RealWorldConst.MODAL_INERTIA: ['acc', 'gyr']},
-    #     sensor_pos=['waist']
-    # ).run()
-
-    dataset_window = RealWorldNpyWindow(
-        parquet_root_dir=parquet_dir,
-        window_size_sec=4,
-        step_size_sec=2,
-        modal_cols={
-            RealWorldConst.MODAL_INERTIA: {
-                'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)']
-            }
-        }
+    RealWorldParquet(
+        raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
+        destination_folder=parquet_dir,
+        sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
+        used_modals={RealWorldConst.MODAL_INERTIA: ['acc']},
+        sensor_pos=['forearm', 'thigh']
     ).run()
-    _=1
+
+    # dataset_window = RealWorldNpyWindow(
+    #     parquet_root_dir=parquet_dir,
+    #     window_size_sec=4,
+    #     step_size_sec=2,
+    #     modal_cols={
+    #         RealWorldConst.MODAL_INERTIA: {
+    #             'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)']
+    #         }
+    #     }
+    # ).run()
+    _ = 1
