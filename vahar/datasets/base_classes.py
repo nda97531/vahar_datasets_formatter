@@ -7,6 +7,7 @@ import pandas as pd
 import polars as pl
 from loguru import logger
 from scipy.stats import mode
+import json
 from my_py_utils.my_py_utils.sliding_window import shifting_window, sliding_window
 from my_py_utils.my_py_utils.string_utils import rreplace
 
@@ -35,6 +36,8 @@ class ParquetDatasetFormatter:
 
         # convert Hz to sample/msec
         self.sampling_rates = {k: v / 1000 for k, v in sampling_rates.items()}
+
+        self.label_dict: dict = {}
 
     def get_output_file_path(self, modal, subject, session) -> str:
         """
@@ -86,13 +89,27 @@ class ParquetDatasetFormatter:
         logger.info(f'Parquet shape {data.shape} written: {output_path}')
         return True
 
+    def export_label_list(self):
+        """
+        Write label list to a JSON file.
+        """
+        assert self.label_dict, 'Class dict not defined.'
+        output_path = f'{self.destination_folder}/label_list.json'
+        if os.path.isfile(output_path):
+            logger.info('Skipping label list before it has been written before.')
+            return
+        with open(output_path, 'w') as F:
+            json.dump(self.label_dict, F)
+        logger.info(f'Label list written to file: {output_path}')
+
     def run(self):
         """
         Main processing method
         """
         # to override: process data of any dataset and
-        # 1. call self.get_output_file_path to check if session has already been processed
+        # 1. call self.get_output_file_path for each session to check if it has already been processed
         # 2. call self.write_output_parquet() for every modal of every session
+        # 3. call self.export_class_list to export class list to a JSON file
         raise NotImplementedError()
 
 
@@ -167,7 +184,7 @@ class NpyWindowFormatter:
             list of strings
         """
         # scan for modal list first
-        modal_folders = sorted(glob(MODAL_PATH_PATTERN.format(root=self.parquet_root_dir, modal='*')))
+        modal_folders = sorted(glob(MODAL_PATH_PATTERN.format(root=self.parquet_root_dir, modal='*/')))
         modals = [p.removesuffix('/').split('/')[-1] for p in modal_folders]
         return modals
 

@@ -403,7 +403,7 @@ class UPFallNpyWindow(NpyWindowFormatter):
                 parquet_session=parquet_session,
                 subject=subject,
                 session_label=session_label,
-                is_short_activity=(session_label in UPFallConst.SHORT_ACTIVITIES) if shift_short_activity else False
+                is_short_activity=shift_short_activity and (session_label in UPFallConst.SHORT_ACTIVITIES)
             )
 
             result.append(session_result)

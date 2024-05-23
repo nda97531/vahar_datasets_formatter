@@ -7,14 +7,14 @@ from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resam
 
 
 def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: float,
-                          sampling_rates: dict) -> list:
+                          sampling_rates: dict, ts_col: str = 'timestamp(ms)') -> list:
     """
     Split an interrupted session into multiple uninterrupted sub-sessions with even timestamps (interpolated)
 
     Args:
         dfs: dict of DFs,
             - key: modal name
-            - value: polars DF with a column 'timestamp(ms)' and feature columns
+            - value: polars DF with a timestamp column and feature columns
         max_interval: dict
             - key: modal name
             - value: max interval between rows of an uninterrupted DF, unit: millisecond
@@ -22,6 +22,7 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
         sampling_rates: dict:
             - key: modal name
             - value: sampling rate to interpolate, unit: sample/millisecond
+        ts_col: timestamp column name, unit: millisecond
 
     Returns:
         list of dicts, each dict is an uninterrupted segment and has the same format as the input dict
@@ -30,8 +31,9 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
     # key: modal; value: list of pairs [start ts, end ts] for each segment
     ts_segments = {}
     for modal, df in dfs.items():
-        ts = df.get_column('timestamp(ms)').to_numpy()
+        ts = df.get_column(ts_col).to_numpy()
         intervals = np.diff(ts)
+        assert intervals.min() >= 0, 'Negative interval found.'
         interruption_idx = np.nonzero(intervals > max_interval[modal])[0]
         interruption_idx = np.concatenate([[-1], interruption_idx, [len(intervals)]])
         ts_segments[modal] = [
@@ -60,11 +62,11 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
         # for each sensor
         for modal, df in dfs.items():
             # crop the segment in sensor DF
-            df = df.filter(pl.col('timestamp(ms)').is_between(combined_ts_segment[0].item(),
-                                                              combined_ts_segment[1].item()))
+            df = df.filter(pl.col(ts_col).is_between(combined_ts_segment[0].item(),
+                                                     combined_ts_segment[1].item()))
 
             # interpolate to resample
-            df = pl_resample_numeric_df(df, 'timestamp(ms)', sampling_rates[modal],
+            df = pl_resample_numeric_df(df, ts_col, sampling_rates[modal],
                                         start_ts=combined_ts_segment[0], end_ts=combined_ts_segment[1])
 
             segment_dfs[modal] = df
