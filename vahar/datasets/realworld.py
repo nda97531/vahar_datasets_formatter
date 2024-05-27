@@ -88,6 +88,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
                                  for modal in used_modals
                                  for submodal in used_modals[modal]}
         self.max_interval = max_interval
+        self.label_dict = dict(zip(range(len(RealWorldConst.CLASS_LABELS)), RealWorldConst.CLASS_LABELS))
 
     def get_list_sessions(self) -> pl.DataFrame:
         """
@@ -283,6 +284,9 @@ class RealWorldParquet(ParquetDatasetFormatter):
                         written_files += 1
 
         logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
+
+        # convert labels from text to numbers
+        self.export_label_list()
 
 
 class RealWorldNpyWindow(NpyWindowFormatter):
