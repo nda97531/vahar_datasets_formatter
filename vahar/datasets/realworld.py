@@ -309,22 +309,22 @@ class RealWorldNpyWindow(NpyWindowFormatter):
 if __name__ == '__main__':
     parquet_dir = '/mnt/data_partition/UCD/dataset_processed/RealWorld'
 
-    RealWorldParquet(
-        raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
-        destination_folder=parquet_dir,
-        sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
-        used_modals={RealWorldConst.MODAL_INERTIA: ['acc']},
-        sensor_pos=['forearm', 'thigh']
-    ).run()
-
-    # dataset_window = RealWorldNpyWindow(
-    #     parquet_root_dir=parquet_dir,
-    #     window_size_sec=4,
-    #     step_size_sec=2,
-    #     modal_cols={
-    #         RealWorldConst.MODAL_INERTIA: {
-    #             'waist': ['waist_acc_x(m/s^2)', 'waist_acc_y(m/s^2)', 'waist_acc_z(m/s^2)']
-    #         }
-    #     }
+    # RealWorldParquet(
+    #     raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
+    #     destination_folder=parquet_dir,
+    #     sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
+    #     used_modals={RealWorldConst.MODAL_INERTIA: ['acc']},
+    #     sensor_pos=['forearm', 'thigh']
     # ).run()
+
+    dataset_window = RealWorldNpyWindow(
+        parquet_root_dir=parquet_dir,
+        window_size_sec=2,
+        step_size_sec=1,
+        modal_cols={
+            RealWorldConst.MODAL_INERTIA: {
+                'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
+            }
+        }
+    ).run()
     _ = 1

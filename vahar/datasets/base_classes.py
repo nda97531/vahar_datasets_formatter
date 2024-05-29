@@ -252,7 +252,7 @@ class NpyWindowFormatter:
     def slide_windows_from_modal_df(self, df: pl.DataFrame, modality: str, session_label: int = None,
                                     is_short_activity: bool = False) -> dict:
         """
-        Slide windows from dataframe of 1 modal.
+        Slide windows from 1 session dataframe of 1 modal.
         If main activity of the session is a short activity, run shifting window instead.
 
         Args:
@@ -333,7 +333,7 @@ class NpyWindowFormatter:
                 sub_modals_col_idx[k] = list_idx
             else:
                 # get specified cols
-                sub_modals_col_idx[k] = [df.columns.index(col) for col in v]
+                sub_modals_col_idx[k] = [df.columns.index(col) for col in v if col in df.columns]
 
         if self.verbose:
             for sub_modal, sub_modal_col_idx in sub_modals_col_idx.items():
@@ -342,7 +342,8 @@ class NpyWindowFormatter:
 
         # split windows by sub-modal
         result = {sub_modal: windows[:, :, sub_modal_col_idx]
-                  for sub_modal, sub_modal_col_idx in sub_modals_col_idx.items()}
+                  for sub_modal, sub_modal_col_idx in sub_modals_col_idx.items()
+                  if sub_modal_col_idx}
         result['label'] = windows_label
 
         return result
