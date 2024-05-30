@@ -42,7 +42,7 @@ class SonarConst:
         # columns to read from raw file
         cls.RAW_ACC_COLS = [f'dv[{axis}]_{pos}' for pos in cls.SENSOR_POS.keys() for axis in range(1, 4)]
         # columns to rename after reading
-        cls.ACC_COLS = [f'dv[{axis}]_{pos}' for pos in cls.SENSOR_POS.values() for axis in range(1, 4)]
+        cls.ACC_COLS = [f'{pos}_acc_{axis}(m/s^2)' for pos in cls.SENSOR_POS.values() for axis in ['x', 'y', 'z']]
 
 
 SonarConst.define_att()
