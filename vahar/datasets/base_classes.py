@@ -1,7 +1,7 @@
 import os
 import re
 from glob import glob
-from typing import Tuple
+from typing import Tuple, Dict, Union
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -322,18 +322,19 @@ class NpyWindowFormatter:
             windows_label = mode(windows_label, axis=-1, nan_policy='raise', keepdims=False).mode
 
         # list of sub-modals within the DF
-        sub_modals_col_idx = self.modal_cols[modality].copy()
+        sub_modals_col_idx: Dict[str, Union[list, None]] = self.modal_cols[modality].copy()
         # get column index from column name for each sub-modal (later used for picking columns in np array)
-        for k, v in sub_modals_col_idx.items():
-            if v is None:
+        for submodal, feature_cols in sub_modals_col_idx.items():
+            if feature_cols is None:
                 # get all feature cols by default
                 list_idx = list(range(df.shape[1]))
                 list_idx.remove(df.columns.index('timestamp(ms)'))
                 list_idx.remove(df.columns.index('label'))
-                sub_modals_col_idx[k] = list_idx
+                sub_modals_col_idx[submodal] = list_idx
             else:
-                # get specified cols
-                sub_modals_col_idx[k] = [df.columns.index(col) for col in v if col in df.columns]
+                # get specified cols; if one column is missing, drop this session
+                idxs = [df.columns.index(col) for col in feature_cols if col in df.columns]
+                sub_modals_col_idx[submodal] = idxs if len(idxs) == len(feature_cols) else []
 
         if self.verbose:
             for sub_modal, sub_modal_col_idx in sub_modals_col_idx.items():
