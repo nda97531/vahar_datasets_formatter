@@ -89,6 +89,10 @@ class UPFallConst:
     # remove every skeleton with its lowest point higher than this position
     LOW_Y = 255
 
+    LABEL_DICT = {0: 'unknown', 1: 'falling forward on hands', 2: 'falling forward on knees', 3: 'falling backward',
+                  4: 'falling sideward', 5: 'falling sitting in chair', 6: 'walking', 7: 'standing', 8: 'sitting',
+                  9: 'picking up object', 10: 'jumping', 11: 'laying'}
+
     # short activities that can't run sliding window
     SHORT_ACTIVITIES = {1, 2, 3, 4, 5, 9}
 
@@ -100,6 +104,10 @@ class UPFallParquet(ParquetDatasetFormatter):
     Before running this class, extract 2d skeleton from Camera2 and put into folder as the example below:
     UP-Fall/Subject1/Activity1/Trial1/Subject1Activity1Trial1Camera2/skeleton/<skeleton json file>.json
     """
+
+    def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict):
+        super().__init__(raw_folder, destination_folder, sampling_rates)
+        self.label_dict = UPFallConst.LABEL_DICT
 
     @staticmethod
     def upper_left_corner_line_equation(x, y):
@@ -136,6 +144,9 @@ class UPFallParquet(ParquetDatasetFormatter):
 
         label_df = data_df.select(['timestamp(ms)', 'label'])
         data_df = data_df.select(UPFallConst.SELECTED_INERTIAL_COLS)
+
+        # handle unknown label 20
+        label_df = label_df.with_columns(pl.col('label').replace(20, 0))
 
         return data_df, label_df
 
@@ -376,6 +387,8 @@ class UPFallParquet(ParquetDatasetFormatter):
             else:
                 skip_file += 1
         logger.info(f'{write_file} file(s) written, {skip_file} file(s) skipped')
+
+        self.export_label_list()
 
 
 class UPFallNpyWindow(NpyWindowFormatter):
