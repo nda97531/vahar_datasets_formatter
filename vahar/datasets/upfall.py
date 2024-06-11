@@ -1,6 +1,8 @@
 import itertools
 import os
 import re
+import zipfile
+
 import numpy as np
 import orjson
 import pandas as pd
@@ -101,8 +103,10 @@ class UPFallParquet(ParquetDatasetFormatter):
     """
     Class for processing UP-Fall dataset.
     Use only Inertial sensors and Camera2.
-    Before running this class, extract 2d skeleton from Camera2 and put into folder as the example below:
-    UP-Fall/Subject1/Activity1/Trial1/Subject1Activity1Trial1Camera2/skeleton/<skeleton json file>.json
+    Before running this class, extract 2d skeleton from Camera2 using OpenPose and put into zip files as the example below:
+    UP-Fall/Subject1/Activity1/Trial1/skeleton.zip
+    Each zip file contains json files, each of which contains skeletons of a frame.
+    Json file names are sorted by timestamp.
     """
 
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict):
@@ -150,46 +154,46 @@ class UPFallParquet(ParquetDatasetFormatter):
 
         return data_df, label_df
 
-    def read_skeleton(self, folder_path: str, norm: bool = True) -> Union[pl.DataFrame, None]:
+    def read_skeleton(self, zip_path: str, norm: bool = True) -> Union[pl.DataFrame, None]:
         """
         Read skeleton data of only the main subject (person) from all frames in a session
 
         Args:
-            folder_path: path to a session folder containing all skeleton json files
+            zip_path: path to a zip file containing all skeleton json files
             norm: whether to normalise skeleton
                 (False only for visualisation, otherwise always True, no need to optimise)
 
         Returns:
             a polars dataframe, each row is a frame
         """
-        json_files = sorted(glob(f'{folder_path}/*.json'))
-        logger.info(f'Found {len(json_files)} json files in {folder_path}')
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            json_files = sorted([item for item in zf.namelist() if item.endswith('.json')])
+            logger.info(f'Found {len(json_files)} json files in {zip_path}')
 
-        if not json_files:
-            return None
-        skel_frames = []
-        timestamps = []
+            if not json_files:
+                return None
+            skel_frames = []
+            timestamps = []
 
-        # for each frame in this session
-        for json_file in json_files:
-            # read a json file
-            with open(json_file, 'r') as F:
-                skeletons = orjson.loads(F.read())
-            skeletons = skeletons['people']
-            skeletons = np.array([np.array(skeleton['pose_keypoints_2d']).reshape(-1, 3) for skeleton in skeletons])
+            # for each frame in this session
+            for json_file in json_files:
+                # read a json file
+                skeletons = orjson.loads(zf.read(json_file))
+                skeletons = skeletons['people']
+                skeletons = np.array([np.array(skeleton['pose_keypoints_2d']).reshape(-1, 3) for skeleton in skeletons])
 
-            # remove joints with low conf
-            low_conf_idx = skeletons[:, :, 2] < UPFallConst.MIN_JOINT_CONF
-            skeletons[low_conf_idx, :2] = np.nan
+                # remove joints with low conf
+                low_conf_idx = skeletons[:, :, 2] < UPFallConst.MIN_JOINT_CONF
+                skeletons[low_conf_idx, :2] = np.nan
 
-            # select one person as the main subject
-            main_skeleton = self.select_main_skeleton(skeletons)
+                # select one person as the main subject
+                main_skeleton = self.select_main_skeleton(skeletons)
 
-            # remove conf column
-            main_skeleton = main_skeleton[:, :2]
+                # remove conf column
+                main_skeleton = main_skeleton[:, :2]
 
-            skel_frames.append(main_skeleton.reshape(-1))
-            timestamps.append(json_file.split(os.sep)[-1].removesuffix('_keypoints.json'))
+                skel_frames.append(main_skeleton.reshape(-1))
+                timestamps.append(json_file.split(os.sep)[-1].removesuffix('_keypoints.json'))
 
         # create DF
         skel_frames = pd.DataFrame(skel_frames, columns=UPFallConst.SKELETON_COLS)
@@ -326,7 +330,7 @@ class UPFallParquet(ParquetDatasetFormatter):
             session_info = f'Subject{subject}Activity{activity}Trial{trial}'
 
         # read data from files
-        skeleton_df = self.read_skeleton(f'{session_folder}/{session_info}Camera2/skeleton/')
+        skeleton_df = self.read_skeleton(f'{session_folder}/skeleton.zip')
         if skeleton_df is None:
             return None
         inertial_df, label_df = self.read_inertial_and_label(f'{session_folder}/{session_info}.csv')
@@ -425,7 +429,7 @@ class UPFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/UP-Fall_draft'
+    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/UP-Fall_draft'
     inertial_freq = 50
     skeletal_freq = 20
     window_size_sec = 4
@@ -433,7 +437,7 @@ if __name__ == '__main__':
     min_step_size_sec = 0.5
 
     UPFallParquet(
-        raw_folder='/mnt/data_drive/projects/raw datasets/UP-Fall',
+        raw_folder='/mnt/data_partition/downloads/UP-Fall',
         destination_folder=parquet_dir,
         sampling_rates={UPFallConst.MODAL_INERTIA: inertial_freq,
                         UPFallConst.MODAL_SKELETON: skeletal_freq}
