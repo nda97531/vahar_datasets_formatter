@@ -39,13 +39,14 @@ class CMDFallConst:
         'leftHip', 'leftKnee', 'leftAnkle', 'leftFoot',
         'rightHip', 'rightKnee', 'rightAnkle', 'rightFoot'
     ]
-    SELECTED_JOINT_LIST = [
-        'hipCenter', 'shoulderCenter',
-        'leftElbow', 'leftWrist',
-        'rightElbow', 'rightWrist',
-        'leftKnee', 'leftAnkle',
-        'rightKnee', 'rightAnkle',
-    ]
+    SELECTED_JOINT_LIST = JOINTS_LIST.copy()
+    # [
+    #     'hipCenter', 'shoulderCenter',
+    #     'leftElbow', 'leftWrist',
+    #     'rightElbow', 'rightWrist',
+    #     'leftKnee', 'leftAnkle',
+    #     'rightKnee', 'rightAnkle',
+    # ]
 
     SELECTED_JOINT_IDX: List[int]
     SELECTED_SKELETON_COLS: List[str]
@@ -77,7 +78,7 @@ CMDFallConst.define_att()
 class CMDFallParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  min_length_segment: float = 10,
-                 use_accelerometer: list = [155]):
+                 use_accelerometer: list = [1, 155]):
         """
         Class for processing CMDFall dataset.
         Use only Inertial sensors and Camera 3.
@@ -108,6 +109,14 @@ class CMDFallParquet(ParquetDatasetFormatter):
         # read annotation file
         anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
         self.anno_df = anno_df.filter(pl.col('kinect_id') == self.use_kinect[0])
+
+        self.label_dict = {
+            0: 'unknown', 1: 'walk', 2: 'run_slowly', 3: 'static_jump', 4: 'move_hand_and_leg', 5: 'left_hand_pick_up',
+            6: 'right_hand_pick_up', 7: 'stagger', 8: 'front_fall', 9: 'back_fall', 10: 'left_fall', 11: 'right_fall',
+            12: 'crawl', 13: 'sit_on_chair_then_stand_up', 14: 'move_chair', 15: 'sit_on_chair_then_fall_left',
+            16: 'sit_on_chair_then_fall_right', 17: 'sit_on_bed_and_stand_up', 18: 'lie_on_bed_and_sit_up',
+            19: 'lie_on_bed_and_fall_left', 20: 'lie_on_bed_and_fall_right'
+        }
 
     def scan_data_files(self) -> pd.DataFrame:
         """
@@ -178,6 +187,19 @@ class CMDFallParquet(ParquetDatasetFormatter):
             'timestamp': 'timestamp(ms)',
             'x': f'{sensor_pos}_acc_x(m/s^2)', 'y': f'{sensor_pos}_acc_y(m/s^2)', 'z': f'{sensor_pos}_acc_z(m/s^2)',
         })
+
+        # handle erroneous timestamps (negative intervals in timestamp column, but the data are fine)
+        # find negative intervals
+        ts = df.get_column('timestamp(ms)').to_numpy().copy()
+        intervals = np.diff(ts)
+        standard_interval = np.median(intervals)
+        neg_idx = np.nonzero(intervals < 0)[0]
+        # shift timestamps forward
+        for idx in neg_idx:
+            ts[idx + 1:] = ts[idx + 1:] - intervals[idx] + standard_interval
+        # assign corrected timestamps
+        df = df.with_columns(pl.lit(ts, dtype=pl.Int64).alias('timestamp(ms)'))
+
         return df
 
     @staticmethod
@@ -353,7 +375,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
             data_dfs = {
                 sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(CMDFallConst.MODAL_INERTIA)
                 else self.read_skeleton_df_file(data_file)
-                for sensor, data_file in session_row.iteritems()
+                for sensor, data_file in session_row.items()
             }
             # split session into uninterrupted segments
             data_segments = self.split_session_to_segments(data_dfs)
@@ -377,6 +399,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 if self.write_output_parquet(skeleton_df, CMDFallConst.MODAL_SKELETON, subject, this_session_info):
                     write_segment_files += 1
         logger.info(f'{write_segment_files} file(s) written, {skip_session_files} session(s) skipped')
+        self.export_label_list()
 
 
 class CMDFallNpyWindow(NpyWindowFormatter):
@@ -398,7 +421,7 @@ class CMDFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_drive/projects/UCD04 - Virtual sensor fusion/processed_parquet/CMDFall_debug'
+    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/CMDFall20'
     inertial_freq = 50
     skeletal_freq = 20
     window_size_sec = 3
@@ -406,12 +429,10 @@ if __name__ == '__main__':
     min_step_size_sec = 0.5
 
     CMDFallParquet(
-        raw_folder='/mnt/data_drive/projects/raw datasets/CMDFall',
+        raw_folder='/mnt/data_partition/downloads/CMDFall',
         destination_folder=parquet_dir,
         sampling_rates={CMDFallConst.MODAL_INERTIA: inertial_freq,
-                        CMDFallConst.MODAL_SKELETON: skeletal_freq},
-        use_accelerometer=[1, 155],
-        use_kinect=[3]
+                        CMDFallConst.MODAL_SKELETON: skeletal_freq}
     ).run()
 
     # CMDFall = CMDFallNpyWindow(
