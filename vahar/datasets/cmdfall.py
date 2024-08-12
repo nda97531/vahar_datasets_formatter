@@ -188,18 +188,6 @@ class CMDFallParquet(ParquetDatasetFormatter):
             'x': f'{sensor_pos}_acc_x(m/s^2)', 'y': f'{sensor_pos}_acc_y(m/s^2)', 'z': f'{sensor_pos}_acc_z(m/s^2)',
         })
 
-        # handle erroneous timestamps (negative intervals in timestamp column, but the data are fine)
-        # find negative intervals
-        ts = df.get_column('timestamp(ms)').to_numpy().copy()
-        intervals = np.diff(ts)
-        standard_interval = np.median(intervals)
-        neg_idx = np.nonzero(intervals < 0)[0]
-        # shift timestamps forward
-        for idx in neg_idx:
-            ts[idx + 1:] = ts[idx + 1:] - intervals[idx] + standard_interval
-        # assign corrected timestamps
-        df = df.with_columns(pl.lit(ts, dtype=pl.Int64).alias('timestamp(ms)'))
-
         return df
 
     @staticmethod

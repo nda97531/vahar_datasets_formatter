@@ -33,7 +33,8 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
     for modal, df in dfs.items():
         ts = df.get_column(ts_col).to_numpy()
         intervals = np.diff(ts)
-        assert intervals.min() >= 0, 'Negative interval found.'
+        if intervals.min() < 0:
+            logger.warning('Negative interval found.')
         interruption_idx = np.nonzero(intervals > max_interval[modal])[0]
         interruption_idx = np.concatenate([[-1], interruption_idx, [len(intervals)]])
         ts_segments[modal] = [
