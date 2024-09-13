@@ -36,12 +36,7 @@ class CZUConst:
                   18: 'Left body turning movement', 19: 'Right body turning movement', 20: 'Left lateral movement',
                   21: 'Right lateral movement'}
 
-    @classmethod
-    def define_att(cls):
-        pass
-
-
-CZUConst.define_att()
+    SUBJECT_MAPPING = {'cx': 1, 'cyy': 2, 'myj': 3, 'qyh': 4, 'zyh': 5}
 
 
 class CZUParquet(ParquetDatasetFormatter):
@@ -84,6 +79,7 @@ class CZUParquet(ParquetDatasetFormatter):
         info = re.search(rf'{os.sep}([a-z]*)_a([0-9]*)_t([0-9]*).mat$', path)
         subject, activity, trial_num = info.groups()
 
+        subject = CZUConst.SUBJECT_MAPPING[subject]
         activity = int(activity) - 1
         trial_num = int(trial_num)
 
@@ -181,7 +177,7 @@ class CZUParquet(ParquetDatasetFormatter):
         for session_file in list_sensor_sessions:
             # get session info
             subject, activity, trial_num = self.get_info_from_session_file(session_file)
-            session_info = f'{subject}_a{activity}_t{trial_num}'
+            session_info = f's{subject}_a{activity}_t{trial_num}'
 
             # check if already run before
             if os.path.isfile(self.get_output_file_path(CZUConst.MODAL_INERTIA, subject, f'{session_info}_seglast')):
@@ -215,31 +211,31 @@ class CZUParquet(ParquetDatasetFormatter):
         self.export_label_list()
 
 
-class RealWorldNpyWindow(NpyWindowFormatter):
+class CZUNpyWindow(NpyWindowFormatter):
     pass
 
 
 if __name__ == '__main__':
     parquet_dir = f'/mnt/data_partition/UCD/dataset_processed/CZU-MHAD'
 
-    CZUParquet(
-        raw_folder='/mnt/data_partition/downloads/CZU-MHAD',
-        destination_folder=parquet_dir,
-        sampling_rates={CZUConst.MODAL_INERTIA: 50},
-        used_inertial_modals=('acc', 'gyr'),
-        inertial_sensor_pos=CZUConst.SENSOR_POSITIONS,
-        min_length_segment=1,
-        max_interval={CZUConst.MODAL_INERTIA: 100}
-    ).run()
-
-    # dataset_window = RealWorldNpyWindow(
-    #     parquet_root_dir=parquet_dir,
-    #     window_size_sec=2,
-    #     step_size_sec=1,
-    #     modal_cols={
-    #         RealWorldConst.MODAL_INERTIA: {
-    #             'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
-    #         }
-    #     }
+    # CZUParquet(
+    #     raw_folder='/mnt/data_partition/downloads/CZU-MHAD',
+    #     destination_folder=parquet_dir,
+    #     sampling_rates={CZUConst.MODAL_INERTIA: 50},
+    #     used_inertial_modals=('acc', 'gyr'),
+    #     inertial_sensor_pos=CZUConst.SENSOR_POSITIONS,
+    #     min_length_segment=1,
+    #     max_interval={CZUConst.MODAL_INERTIA: 100}
     # ).run()
+
+    dataset_window = CZUNpyWindow(
+        parquet_root_dir=parquet_dir,
+        window_size_sec=2,
+        step_size_sec=1,
+        modal_cols={
+            CZUConst.MODAL_INERTIA: {
+                'chest_acc': ['chest_acc_x(m/s^2)', 'chest_acc_y(m/s^2)', 'chest_acc_z(m/s^2)']
+            }
+        }
+    ).run()
     _ = 1
