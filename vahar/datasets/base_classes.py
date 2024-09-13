@@ -429,4 +429,17 @@ class NpyWindowFormatter:
         # for each session:
         # step 2: call self.get_parquet_session_info() to get session info if needed
         # step 3: call self.parquet_to_windows() to run sliding window on each session
-        raise NotImplementedError()
+
+        # get list of parquet files
+        parquet_sessions = self.get_parquet_file_list()
+
+        result = []
+        # for each session
+        for parquet_session in parquet_sessions.iter_rows(named=True):
+            # get session info
+            _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
+
+            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
+            result.append(session_result)
+        result = pd.DataFrame(result)
+        return result

@@ -130,20 +130,7 @@ class WisdmParquet(ParquetDatasetFormatter):
 
 
 class WisdmNpyWindow(NpyWindowFormatter):
-    def run(self) -> pd.DataFrame:
-        # get list of parquet files
-        parquet_sessions = self.get_parquet_file_list()
-
-        result = []
-        # for each session
-        for parquet_session in parquet_sessions.iter_rows(named=True):
-            # get session info
-            modal, subject, session_id = self.get_parquet_session_info(list(parquet_session.values())[0])
-
-            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
-            result.append(session_result)
-        result = pd.DataFrame(result)
-        return result
+    pass
 
 
 if __name__ == '__main__':

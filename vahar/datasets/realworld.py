@@ -31,7 +31,7 @@ class RealWorldConst:
     RAW_MODALS: list
 
     CLASS_LABELS = ['walking', 'running', 'sitting', 'standing', 'lying', 'climbingup', 'climbingdown', 'jumping']
-    SENSOR_POSITION = {'chest', 'forearm', 'head', 'shin', 'thigh', 'upperarm', 'waist'}
+    SENSOR_POSITION = {'head', 'chest', 'waist', 'upperarm', 'forearm', 'thigh', 'shin'}
 
     @classmethod
     def define_att(cls):
@@ -67,7 +67,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
             max_interval: dict[submodal] = maximum intervals (millisecond) between rows of an uninterrupted segment;
                 default = 500 ms
         """
-        used_modals = {'inertia': ['acc', 'gyr']} if used_modals is None else used_modals
+        used_modals = {RealWorldConst.MODAL_INERTIA: ['acc', 'gyr']} if used_modals is None else used_modals
         max_interval = {'acc': 500, 'gyr': 500} if max_interval is None else max_interval
 
         all_submodals = np.concatenate(list(used_modals.values()))
@@ -259,9 +259,16 @@ class RealWorldParquet(ParquetDatasetFormatter):
 
             # a 2-level dict: dict[submodal][sensor position] = raw DF
             all_dfs_of_session = {}
+            session_is_empty = True
             # read all submodal files of this session
             for submodal, submodal_file in session_row.items():
                 all_dfs_of_session[submodal] = self.read_csv_in_zip(submodal_file)
+                session_is_empty &= (len(all_dfs_of_session[submodal]) == 0)
+
+            if session_is_empty:
+                logger.info(f"Skipping session {session_info} because it's empty")
+                skipped_sessions += 1
+                continue
 
             # split a session (which may be interrupted), into uninterrupted segments
             segments = self.split_session_to_segments(all_dfs_of_session)
@@ -290,31 +297,20 @@ class RealWorldParquet(ParquetDatasetFormatter):
 
 
 class RealWorldNpyWindow(NpyWindowFormatter):
-    def run(self) -> pd.DataFrame:
-        # get list of parquet files
-        parquet_sessions = self.get_parquet_file_list()
-
-        result = []
-        # for each session
-        for parquet_session in parquet_sessions.iter_rows(named=True):
-            # get session info
-            modal, subject, session_id = self.get_parquet_session_info(list(parquet_session.values())[0])
-
-            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
-            result.append(session_result)
-        result = pd.DataFrame(result)
-        return result
+    pass
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/RealWorld'
+    parquet_dir = f'/mnt/data_partition/UCD/dataset_processed/RealWorld_test'
 
     RealWorldParquet(
         raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
         destination_folder=parquet_dir,
         sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
         used_modals={RealWorldConst.MODAL_INERTIA: ['acc']},
-        sensor_pos=['forearm', 'waist']
+        sensor_pos=list(RealWorldConst.SENSOR_POSITION),
+        min_length_segment=4,
+        max_interval={'acc': 500}
     ).run()
 
     # dataset_window = RealWorldNpyWindow(
