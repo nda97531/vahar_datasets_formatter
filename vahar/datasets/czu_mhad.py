@@ -1,7 +1,5 @@
 import os
 import re
-import zipfile
-from collections import defaultdict
 from typing import Dict, List
 from loguru import logger
 import numpy as np
@@ -9,15 +7,14 @@ import polars as pl
 from glob import glob
 import scipy.io as scio
 
-from my_py_utils.my_py_utils.string_utils import rreplace
-from vahar.constant import G_TO_MS2, DEG_TO_RAD
-
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from vahar.modal_sync import split_interrupted_dfs
+    from vahar.constant import G_TO_MS2, DEG_TO_RAD
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..modal_sync import split_interrupted_dfs
+    from ..constant import G_TO_MS2, DEG_TO_RAD
 
 
 class CZUConst:

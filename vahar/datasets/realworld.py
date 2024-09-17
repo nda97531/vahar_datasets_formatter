@@ -5,7 +5,6 @@ from collections import defaultdict
 from typing import Dict
 from loguru import logger
 import numpy as np
-import pandas as pd
 import polars as pl
 from glob import glob
 
@@ -301,26 +300,27 @@ class RealWorldNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = f'/mnt/data_partition/UCD/dataset_processed/RealWorld_test'
+    parquet_dir = f'/mnt/data_partition/UCD/dataset_processed/RealWorld_2s'
 
-    RealWorldParquet(
-        raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
-        destination_folder=parquet_dir,
-        sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
-        used_modals={RealWorldConst.MODAL_INERTIA: ['acc']},
-        sensor_pos=list(RealWorldConst.SENSOR_POSITION),
-        min_length_segment=4,
-        max_interval={'acc': 500}
-    ).run()
-
-    # dataset_window = RealWorldNpyWindow(
-    #     parquet_root_dir=parquet_dir,
-    #     window_size_sec=2,
-    #     step_size_sec=1,
-    #     modal_cols={
-    #         RealWorldConst.MODAL_INERTIA: {
-    #             'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
-    #         }
-    #     }
+    # RealWorldParquet(
+    #     raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
+    #     destination_folder=parquet_dir,
+    #     sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
+    #     used_modals={RealWorldConst.MODAL_INERTIA: ['acc', 'gyr']},
+    #     sensor_pos=list(RealWorldConst.SENSOR_POSITION),
+    #     min_length_segment=4,
+    #     max_interval={'acc': 500, 'gyr': 500}
     # ).run()
+
+    df = RealWorldNpyWindow(
+        parquet_root_dir=parquet_dir,
+        window_size_sec=2,
+        step_size_sec=1,
+        modal_cols={
+            RealWorldConst.MODAL_INERTIA: {
+                'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
+            }
+        }
+    ).run()
+    df = df.dropna()
     _ = 1

@@ -370,7 +370,7 @@ class NpyWindowFormatter:
                 list_idx.remove(col_names.index('label'))
                 sub_modals_col_idx[submodal] = list_idx
             else:
-                # get specified cols; if one column is missing, drop this session
+                # get specified cols; if one column is missing, return empty
                 idxs = [col_names.index(col) for col in feature_cols if col in col_names]
                 sub_modals_col_idx[submodal] = idxs if len(idxs) == len(feature_cols) else []
 
