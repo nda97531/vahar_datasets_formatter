@@ -1,6 +1,6 @@
 from typing import List
 import os
-
+import numpy as np
 from loguru import logger
 import polars as pl
 from glob import glob
@@ -8,11 +8,9 @@ from glob import glob
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from vahar.modal_sync import split_interrupted_dfs
-    from vahar.constant import G_TO_MS2
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..modal_sync import split_interrupted_dfs
-    from ..constant import G_TO_MS2
 
 
 class SonarConst:
@@ -30,6 +28,8 @@ class SonarConst:
         'RF': 'rightAnkle'
     }
 
+    DELTA_FREQUENCY = 60
+
     LABEL_LIST = ['null - activity', 'blow-dry', 'change clothes', 'clean up', 'collect dishes', 'comb hair',
                   'deliver food', 'dental care', 'documentation', 'kitchen preparation', 'make bed', 'pour drinks',
                   'prepare bath', 'push wheelchair', 'put accessories', 'put food on plate', 'put medication',
@@ -39,8 +39,18 @@ class SonarConst:
     def define_att(cls):
         # columns to read from raw file
         cls.RAW_ACC_COLS = [f'dv[{axis}]_{pos}' for pos in cls.SENSOR_POS.keys() for axis in range(1, 4)]
+        cls.RAW_DELTA_QUAT_COLS = [f'dq_{axis}_{pos}' for pos in cls.SENSOR_POS.keys() for axis in ['W', 'X', 'Y', 'Z']]
+
         # columns to rename after reading
-        cls.ACC_COLS = [f'{pos}_acc_{axis}(m/s^2)' for pos in cls.SENSOR_POS.values() for axis in ['x', 'y', 'z']]
+        cls.OUTPUT_COLS = {cls.TS_COL: 'timestamp(ms)', cls.LABEL_COL: 'label'}
+        cls.OUTPUT_COLS.update(dict(zip(
+            cls.RAW_ACC_COLS,
+            [f'{pos}_acc_{axis}(m/s^2)' for pos in cls.SENSOR_POS.values() for axis in ['x', 'y', 'z']]
+        )))
+        cls.OUTPUT_COLS.update(dict(zip(
+            [f'dq_{axis}_{pos}' for pos in cls.SENSOR_POS.keys() for axis in ['X', 'Y', 'Z']],
+            [f'{pos}_gyr_{axis}(rad/s)' for pos in cls.SENSOR_POS.values() for axis in ['x', 'y', 'z']]
+        )))
 
 
 SonarConst.define_att()
@@ -86,6 +96,40 @@ class SonarParquet(ParquetDatasetFormatter):
         session_id, subject_id = info.split('_sub')
         return int(session_id), int(subject_id)
 
+    def get_gyroscope_exprs(self, df: pl.DataFrame, quat_freq: float = 60.) -> dict:
+        """
+        Define expressions to convert delta quaternion to gyroscope in a polars DataFrame. Gyroscope axis x, y, z are
+        updated into x, y, z columns of delta quaternion.
+
+        Args:
+            df: polars Dataframe
+            quat_freq: frequency (Hz) of delta (frequency = 1 / interval)
+
+        Returns:
+            dict with format: key[sensor position]
+        """
+        expressions = {}
+
+        # for each sensor unit
+        for pos in SonarConst.SENSOR_POS.keys():
+            # 4 delta quaternion columns of this sensor unit
+            quat_cols = [f'dq_{axis}_{pos}' for axis in ['W', 'X', 'Y', 'Z']]
+
+            # check if data is valid
+            assert df.select((pl.col(quat_cols[0]) >= 0).all()).item(), \
+                'Quaternion W axis must be non-negative by convention.'
+            assert df.select(pl.any_horizontal(quat_cols[1:]).all()).item(), \
+                'Length of a rotation axis vector is zero, please fix the code to handle this case.'
+
+            # define conversion expressions
+            angle = pl.col(quat_cols[0]).arccos() * 2
+            axis_length = (pl.sum_horizontal(pl.col(quat_cols[1:]) ** 2)).sqrt()
+            scale_factor = angle / axis_length * quat_freq
+
+            # add expressions to result dict
+            expressions.update({col: pl.col(col) * scale_factor for col in quat_cols[1:]})
+        return expressions
+
     def read_raw_csv(self, path: str) -> pl.DataFrame:
         """
         Read and format a raw csv file.
@@ -96,19 +140,23 @@ class SonarParquet(ParquetDatasetFormatter):
         Returns:
             polars Dataframe
         """
-        read_cols = [SonarConst.TS_COL, SonarConst.LABEL_COL, *SonarConst.RAW_ACC_COLS]
+        read_cols = [SonarConst.TS_COL, SonarConst.LABEL_COL, *SonarConst.RAW_ACC_COLS, *SonarConst.RAW_DELTA_QUAT_COLS]
         df = pl.read_csv(path, separator=',', columns=read_cols)
-        df = df.rename(dict(zip(read_cols, ['timestamp(ms)', 'label', *SonarConst.ACC_COLS])))
 
         df = df.with_columns(
-            (pl.col('timestamp(ms)') / 1e3).round().cast(pl.Int64),
-            pl.col(SonarConst.ACC_COLS) * (G_TO_MS2 / 0.165),
-            pl.col('label').replace(SonarConst.LABEL_LIST, range(len(SonarConst.LABEL_LIST))).cast(pl.Int32)
+            (pl.col(SonarConst.TS_COL) / 1e3).round().cast(pl.Int64),
+            pl.col(SonarConst.RAW_ACC_COLS) * SonarConst.DELTA_FREQUENCY,
+            pl.col(SonarConst.LABEL_COL).replace(SonarConst.LABEL_LIST, range(len(SonarConst.LABEL_LIST))).cast(
+                pl.Int32),
+            **self.get_gyroscope_exprs(df)
         )
         df = df.drop_nulls()
+
+        df = df.rename(SonarConst.OUTPUT_COLS)
+        df = df.select(SonarConst.OUTPUT_COLS.values())
         return df
 
-    def split_segments(self, df: pl.DataFrame, drop_col: tuple = ('subject',)) -> List[pl.DataFrame]:
+    def split_segments(self, df: pl.DataFrame, drop_col: tuple = ()) -> List[pl.DataFrame]:
         """
         Split a dataframe into multiple uninterrupted dataframes.
 
@@ -149,7 +197,7 @@ class SonarParquet(ParquetDatasetFormatter):
                 logger.info(f'Skipping session {session_id} because it has been done before.')
                 skipped_sessions += 1
                 continue
-            logger.info(f'Starting session {session_id}')
+            logger.info(f'Starting session {session_id}_sub{subject_id}')
 
             df = self.read_raw_csv(file)
             segment_dfs = self.split_segments(df)
@@ -171,10 +219,10 @@ class SonarNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/Sonar'
+    parquet_dir = '/home/nda97531/Documents/dataset_parquet/Sonar'
 
     SonarParquet(
-        raw_folder='/mnt/data_partition/downloads/SONAR_ML',
+        raw_folder='/home/nda97531/Documents/SONAR_ML',
         destination_folder=parquet_dir,
         sampling_rates={SonarConst.MODAL_INERTIA: 50}
     ).run()
