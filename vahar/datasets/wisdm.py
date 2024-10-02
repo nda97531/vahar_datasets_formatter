@@ -24,8 +24,6 @@ class WisdmParquet(ParquetDatasetFormatter):
                  min_length_segment: float = 10, max_interval: dict = None):
         """
         Class for WISDM dataset.
-        In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
-        [acc, gyr, mag], which are also raw modals.
 
         Args:
             raw_folder: path to unprocessed dataset

@@ -1,6 +1,5 @@
 from typing import List
 import os
-import numpy as np
 from loguru import logger
 import polars as pl
 from glob import glob
@@ -14,9 +13,7 @@ else:
 
 
 class SonarConst:
-    # modal names; currently only support accelerometer
     MODAL_INERTIA = 'inertia'
-    SUBMODAL_ACC = 'acc'
 
     TS_COL = 'SampleTimeFine'
     LABEL_COL = 'activity'
@@ -61,8 +58,6 @@ class SonarParquet(ParquetDatasetFormatter):
                  min_length_segment: float = 10, max_interval: dict = None):
         """
         Class for SONAR dataset.
-        In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
-        [acc, gyr, mag], which are also raw modals.
 
         Args:
             raw_folder: path to unprocessed dataset
@@ -96,14 +91,13 @@ class SonarParquet(ParquetDatasetFormatter):
         session_id, subject_id = info.split('_sub')
         return int(session_id), int(subject_id)
 
-    def get_gyroscope_exprs(self, df: pl.DataFrame, quat_freq: float = 60.) -> dict:
+    def get_gyroscope_exprs(self, df: pl.DataFrame) -> dict:
         """
         Define expressions to convert delta quaternion to gyroscope in a polars DataFrame. Gyroscope axis x, y, z are
         updated into x, y, z columns of delta quaternion.
 
         Args:
             df: polars Dataframe
-            quat_freq: frequency (Hz) of delta (frequency = 1 / interval)
 
         Returns:
             dict with format: key[sensor position]
@@ -124,7 +118,8 @@ class SonarParquet(ParquetDatasetFormatter):
             # define conversion expressions
             angle = pl.col(quat_cols[0]).arccos() * 2
             axis_length = (pl.sum_horizontal(pl.col(quat_cols[1:]) ** 2)).sqrt()
-            scale_factor = angle / axis_length * quat_freq
+            scale_factor = angle / axis_length * SonarConst.DELTA_FREQUENCY
+            scale_factor = pl.when(scale_factor.is_finite()).then(scale_factor).otherwise(0)
 
             # add expressions to result dict
             expressions.update({col: pl.col(col) * scale_factor for col in quat_cols[1:]})
@@ -187,6 +182,7 @@ class SonarParquet(ParquetDatasetFormatter):
     def run(self):
         written_files = 0
         skipped_sessions = 0
+        skipped_files = 0
 
         # for each session
         for file in glob(f'{self.raw_folder}/*.csv'):
@@ -205,10 +201,13 @@ class SonarParquet(ParquetDatasetFormatter):
             # write each segment DF
             for seg_i, seg_df in enumerate(segment_dfs):
                 segment_id = seg_i if seg_i != len(segment_dfs) - 1 else 'last'
-                self.write_output_parquet(seg_df, SonarConst.MODAL_INERTIA, subject_id, f'{session_id}_{segment_id}')
-                written_files += 1
+                written = self.write_output_parquet(seg_df, SonarConst.MODAL_INERTIA, subject_id,
+                                                    f'{session_id}_{segment_id}')
+                written_files += int(written)
+                skipped_files += int(not written)
 
-        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
 
         # convert labels from text to numbers
         self.export_label_list()
@@ -224,7 +223,8 @@ if __name__ == '__main__':
     SonarParquet(
         raw_folder='/home/nda97531/Documents/SONAR_ML',
         destination_folder=parquet_dir,
-        sampling_rates={SonarConst.MODAL_INERTIA: 50}
+        sampling_rates={SonarConst.MODAL_INERTIA: 50},
+        min_length_segment=5
     ).run()
 
     # dataset_window = SonarNpyWindow(

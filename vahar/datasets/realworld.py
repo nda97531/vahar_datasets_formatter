@@ -47,8 +47,8 @@ class RealWorldParquet(ParquetDatasetFormatter):
                  min_length_segment: float = 10, max_interval: dict = None):
         """
         Class for RealWorld2016 dataset.
-        In this dataset, raw modals are considered as sub-modals. For example, modal 'inertia' contains 3 sub-modals:
-        [acc, gyr, mag], which are also raw modals.
+        Raw modals in the dataset files are considered as sub-modals in this code.
+        For example, modal 'inertia' contains 3 sub-modals: [acc, gyr, mag], which are modals in the raw files.
 
         Args:
             raw_folder: path to unprocessed dataset
