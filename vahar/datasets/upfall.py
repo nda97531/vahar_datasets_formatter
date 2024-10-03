@@ -52,15 +52,7 @@ class UPFallConst:
 
         'label'
     ]
-    SELECTED_INERTIAL_COLS = [
-        'timestamp(ms)',
-
-        'belt_acc_x(m/s^2)', 'belt_acc_y(m/s^2)', 'belt_acc_z(m/s^2)',
-        'belt_gyro_x(rad/s)', 'belt_gyro_y(rad/s)', 'belt_gyro_z(rad/s)',
-
-        'wrist_acc_x(m/s^2)', 'wrist_acc_y(m/s^2)', 'wrist_acc_z(m/s^2)',
-        'wrist_gyro_x(rad/s)', 'wrist_gyro_y(rad/s)', 'wrist_gyro_z(rad/s)'
-    ]
+    SELECTED_INERTIAL_COLS = [c for c in INERTIAL_COLS if c.endswith(('(ms)', '(m/s^2)', '(rad/s)'))]
 
     SKELETON_COLS = list(itertools.chain.from_iterable(
         [f'x_{joint}', f'y_{joint}'] for joint in
@@ -108,10 +100,6 @@ class UPFallParquet(ParquetDatasetFormatter):
     Each zip file contains json files, each of which contains skeletons of a frame.
     Json file names are sorted by timestamp.
     """
-
-    def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict):
-        super().__init__(raw_folder, destination_folder, sampling_rates)
-        self.label_dict = UPFallConst.LABEL_DICT
 
     @staticmethod
     def upper_left_corner_line_equation(x, y):
@@ -392,7 +380,7 @@ class UPFallParquet(ParquetDatasetFormatter):
                 skip_file += 1
         logger.info(f'{write_file} file(s) written, {skip_file} file(s) skipped')
 
-        self.export_label_list()
+        self.export_label_list(UPFallConst.LABEL_DICT)
 
 
 class UPFallNpyWindow(NpyWindowFormatter):

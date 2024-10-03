@@ -155,6 +155,9 @@ class SFUParquet(ParquetDatasetFormatter):
 
         logger.info(f'{write_file} file(s) written, {skip_file} file(s) skipped')
 
+        # convert labels from text to numbers
+        self.export_label_list({0: 'non-fall', 1: 'fall'})
+
 
 class SFUNpyWindow(NpyWindowFormatter):
     def run(self) -> pd.DataFrame:

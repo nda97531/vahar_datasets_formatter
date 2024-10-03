@@ -89,17 +89,20 @@ class ParquetDatasetFormatter:
         logger.info(f'Parquet shape {data.shape} written: {output_path}')
         return True
 
-    def export_label_list(self):
+    def export_label_list(self, label_dict: dict = None):
         """
         Write label list to a JSON file.
+
+        Args:
+            label_dict: the dict to save to file, if not specified, use self.label_dict
         """
-        assert self.label_dict, 'Class dict not defined.'
+        assert self.label_dict or label_dict, 'Class dict not defined.'
         output_path = f'{self.destination_folder}/label_list.json'
         if os.path.isfile(output_path):
             logger.info('Skipping label list before it has been written before.')
             return
         with open(output_path, 'w') as F:
-            json.dump(self.label_dict, F)
+            json.dump(label_dict if label_dict else self.label_dict, F)
         logger.info(f'Label list written to file: {output_path}')
 
     def run(self):
@@ -274,6 +277,7 @@ class NpyWindowFormatter:
         df_sampling_rate = 1000 / (df_sampling_rate[1] - df_sampling_rate[0])
         window_size_row = int(self.window_size_sec * df_sampling_rate)
 
+        # convert data from DataFrame to numpy array
         arr = df.to_numpy()
         label_col_idx = df.columns.index('label')
         label_arr = df.get_column('label').to_numpy()

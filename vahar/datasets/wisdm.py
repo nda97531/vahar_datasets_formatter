@@ -105,6 +105,7 @@ class WisdmParquet(ParquetDatasetFormatter):
 
         written_files = 0
         skipped_subjects = 0
+        skipped_files = 0
         # for each subject
         for subject_id, subject_df in raw_df.group_by(['subject']):
             subject_id = subject_id[0]
@@ -120,10 +121,12 @@ class WisdmParquet(ParquetDatasetFormatter):
             # write each segment DF
             for seg_i, seg_df in enumerate(segment_dfs):
                 session_id = seg_i if seg_i != len(segment_dfs) - 1 else 'last'
-                self.write_output_parquet(seg_df, WisdmConst.MODAL_INERTIA, subject_id, session_id)
-                written_files += 1
+                written = self.write_output_parquet(seg_df, WisdmConst.MODAL_INERTIA, subject_id, session_id)
+                written_files += int(written)
+                skipped_files += int(not written)
 
-        logger.info(f'{written_files} file(s) written, {skipped_subjects} subject(s) skipped')
+        logger.info(f'{written_files} file(s) written, {skipped_subjects} subject(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
         self.export_label_list()
 
 

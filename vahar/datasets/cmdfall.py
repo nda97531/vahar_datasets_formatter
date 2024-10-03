@@ -335,8 +335,9 @@ class CMDFallParquet(ParquetDatasetFormatter):
         session_files = self.scan_data_files()
         logger.info(f'Found {len(session_files)} sessions in total')
 
-        skip_session_files = 0
-        write_segment_files = 0
+        skipped_sessions = 0
+        skipped_files = 0
+        written_files = 0
         # for each session
         for _, session_row in session_files.iterrows():
             # get session info
@@ -347,7 +348,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
             if os.path.isfile(self.get_output_file_path(CMDFallConst.MODAL_INERTIA, subject, session_info)) \
                     and os.path.isfile(self.get_output_file_path(CMDFallConst.MODAL_SKELETON, subject, session_info)):
                 logger.info(f'Skipping session {session_info} because already run before')
-                skip_session_files += 1
+                skipped_sessions += 1
                 continue
             logger.info(f'Starting session {session_info}')
 
@@ -368,18 +369,21 @@ class CMDFallParquet(ParquetDatasetFormatter):
 
             # add label column and save each segment
             for i, segment in enumerate(data_segments):
-                this_session_info = f'{session_info}_{i}' if i < len(data_segments) - 1 else session_info
+                segment_info = f'{session_info}_{i}' if i < len(data_segments) - 1 else session_info
                 inertial_df = segment[CMDFallConst.MODAL_INERTIA]
                 skeleton_df = segment[CMDFallConst.MODAL_SKELETON]
 
                 # add label
                 skeleton_df, inertial_df = self.assign_label(skeleton_df, inertial_df, session_anno_df)
                 # write files
-                if self.write_output_parquet(inertial_df, CMDFallConst.MODAL_INERTIA, subject, this_session_info):
-                    write_segment_files += 1
-                if self.write_output_parquet(skeleton_df, CMDFallConst.MODAL_SKELETON, subject, this_session_info):
-                    write_segment_files += 1
-        logger.info(f'{write_segment_files} file(s) written, {skip_session_files} session(s) skipped')
+                written = self.write_output_parquet(inertial_df, CMDFallConst.MODAL_INERTIA, subject, segment_info)
+                written_files += int(written)
+                skipped_files += int(not written)
+                written = self.write_output_parquet(skeleton_df, CMDFallConst.MODAL_SKELETON, subject, segment_info)
+                written_files += int(written)
+                skipped_files += int(not written)
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
         self.export_label_list()
 
 

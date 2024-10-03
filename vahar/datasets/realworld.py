@@ -241,6 +241,7 @@ class RealWorldParquet(ParquetDatasetFormatter):
         logger.info(f'Found {len(list_sessions)} sessions in total')
 
         skipped_sessions = 0
+        skipped_files = 0
         written_files = 0
         # for each session
         for session_row in list_sessions.iter_rows(named=True):
@@ -286,10 +287,12 @@ class RealWorldParquet(ParquetDatasetFormatter):
 
                 # write to files
                 for modal, df in seg.items():
-                    if self.write_output_parquet(df, modal, subject_id, write_name):
-                        written_files += 1
+                    written = self.write_output_parquet(df, modal, subject_id, write_name)
+                    written_files += int(written)
+                    skipped_files += int(not written)
 
-        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
 
         # convert labels from text to numbers
         self.export_label_list()

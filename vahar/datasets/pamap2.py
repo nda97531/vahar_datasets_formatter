@@ -20,6 +20,11 @@ class Pamap2Const:
     SELECTED_HEARTRATE_COLS = ['timestamp(ms)', 'label', 'heart_rate(bpm)']
     SELECTED_IMU_COLS = ['timestamp(ms)', 'label']
 
+    LABEL_DICT = {1: 'lying', 2: 'sitting', 3: 'standing', 4: 'walking', 5: 'running', 6: 'cycling',
+                  7: 'Nordic walking', 9: 'watching TV', 10: 'computer work', 11: 'car driving', 12: 'ascending stairs',
+                  13: 'descending stairs', 16: 'vacuum cleaning', 17: 'ironing', 18: 'folding laundry',
+                  19: 'house cleaning', 20: 'playing soccer', 24: 'rope jumping'}
+
     @classmethod
     def define_att(cls):
         imu_cols = [
@@ -144,6 +149,9 @@ class Pamap2Parquet(ParquetDatasetFormatter):
         session_files = sorted(glob(f'{self.raw_folder}/*/subject*.dat'))
         logger.info(f'Found {len(session_files)} sessions')
 
+        skipped_sessions = 0
+        skipped_files = 0
+        written_files = 0
         for session_file in session_files:
             subset, subject = self.get_session_info(session_file)
             logger.info(f'Processing subject {subject}, session {subset}')
@@ -152,6 +160,7 @@ class Pamap2Parquet(ParquetDatasetFormatter):
             hr_output_path = self.get_output_file_path(Pamap2Const.HEARTRATE_MODAL, subject, subset)
             if os.path.isfile(imu_output_path) and os.path.isfile(hr_output_path):
                 logger.info(f'Skipping because already run before')
+                skipped_sessions += 1
                 continue
 
             dfs = self.read_raw_df(session_file)
@@ -159,7 +168,15 @@ class Pamap2Parquet(ParquetDatasetFormatter):
             for i, modal_dfs in enumerate(dfs):
                 write_name = f'{subset}_{i}' if (i != len(dfs) - 1) else subset
                 for modal in [Pamap2Const.INERTIA_MODAL, Pamap2Const.HEARTRATE_MODAL]:
-                    self.write_output_parquet(modal_dfs[modal], modal, subject, write_name)
+                    written = self.write_output_parquet(modal_dfs[modal], modal, subject, write_name)
+                    written_files += int(written)
+                    skipped_files += int(not written)
+
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
+
+        # convert labels from text to numbers
+        self.export_label_list(Pamap2Const.LABEL_DICT)
 
 
 class Pamap2NpyWindow(NpyWindowFormatter):

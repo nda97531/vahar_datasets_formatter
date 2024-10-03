@@ -171,6 +171,7 @@ class FallAllDParquet(ParquetDatasetFormatter):
 
         # write
         skipped_sessions = 0
+        skipped_files = 0
         written_files = 0
         # for each session
         for session in whole_dataset:
@@ -194,10 +195,15 @@ class FallAllDParquet(ParquetDatasetFormatter):
             data_df = self.add_ts_and_label(data_df, activity)
 
             # write file
-            if self.write_output_parquet(data_df, FallAllDConst.MODAL_INERTIA, subject, session_info):
-                written_files += 1
+            written = self.write_output_parquet(data_df, FallAllDConst.MODAL_INERTIA, subject, session_info)
+            written_files += int(written)
+            skipped_files += int(not written)
 
-        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped')
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) skipped')
+
+        # convert labels from text to numbers
+        self.export_label_list({0: 'non-fall', 1: 'fall'})
 
 
 class FallAllDNpyWindow(NpyWindowFormatter):
