@@ -7,7 +7,8 @@ from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resam
 
 
 def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: float,
-                          sampling_rates: dict, ts_col: str = 'timestamp(ms)') -> list:
+                          sampling_rates: dict, ts_col: str = 'timestamp(ms)',
+                          raise_neg_interval: bool = True) -> list:
     """
     Split an interrupted session into multiple uninterrupted sub-sessions with even timestamps (interpolated)
 
@@ -23,6 +24,7 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
             - key: modal name
             - value: sampling rate to interpolate, unit: sample/millisecond
         ts_col: timestamp column name, unit: millisecond
+        raise_neg_interval: whether to raise an error if encountering negative intervals
 
     Returns:
         list of dicts, each dict is an uninterrupted segment and has the same format as the input dict
@@ -34,7 +36,10 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
         ts = df.get_column(ts_col).to_numpy()
         intervals = np.diff(ts)
         if intervals.min() < 0:
-            logger.warning('Negative interval found.')
+            if raise_neg_interval:
+                raise ValueError('Negative interval found.')
+            else:
+                logger.warning('Negative interval found.')
         interruption_idx = np.nonzero(intervals > max_interval[modal])[0]
         interruption_idx = np.concatenate([[-1], interruption_idx, [len(intervals)]])
         ts_segments[modal] = [

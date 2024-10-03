@@ -32,6 +32,12 @@ class CMDFallConst:
 
     ACCELEROMETER_POSITION = {1: 'wrist', 155: 'waist'}
 
+    LABEL_DICT = {0: 'unknown', 1: 'walk', 2: 'run_slowly', 3: 'static_jump', 4: 'move_hand_and_leg',
+                  5: 'left_hand_pick_up', 6: 'right_hand_pick_up', 7: 'stagger', 8: 'front_fall', 9: 'back_fall',
+                  10: 'left_fall', 11: 'right_fall', 12: 'crawl', 13: 'sit_on_chair_then_stand_up', 14: 'move_chair',
+                  15: 'sit_on_chair_then_fall_left', 16: 'sit_on_chair_then_fall_right', 17: 'sit_on_bed_and_stand_up',
+                  18: 'lie_on_bed_and_sit_up', 19: 'lie_on_bed_and_fall_left', 20: 'lie_on_bed_and_fall_right'}
+
     JOINTS_LIST = [
         'hipCenter', 'spine', 'shoulderCenter', 'head',
         'leftShoulder', 'leftElbow', 'leftWrist', 'leftHand',
@@ -102,14 +108,6 @@ class CMDFallParquet(ParquetDatasetFormatter):
         # read annotation file
         anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
         self.anno_df = anno_df.filter(pl.col('kinect_id') == self.use_kinect[0])
-
-        self.label_dict = {
-            0: 'unknown', 1: 'walk', 2: 'run_slowly', 3: 'static_jump', 4: 'move_hand_and_leg', 5: 'left_hand_pick_up',
-            6: 'right_hand_pick_up', 7: 'stagger', 8: 'front_fall', 9: 'back_fall', 10: 'left_fall', 11: 'right_fall',
-            12: 'crawl', 13: 'sit_on_chair_then_stand_up', 14: 'move_chair', 15: 'sit_on_chair_then_fall_left',
-            16: 'sit_on_chair_then_fall_right', 17: 'sit_on_bed_and_stand_up', 18: 'lie_on_bed_and_sit_up',
-            19: 'lie_on_bed_and_fall_left', 20: 'lie_on_bed_and_fall_right'
-        }
 
     def scan_data_files(self) -> pd.DataFrame:
         """
@@ -384,7 +382,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 skipped_files += int(not written)
         logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
                     f'{skipped_files} file(s) skipped')
-        self.export_label_list()
+        self.export_label_list(CMDFallConst.LABEL_DICT)
 
 
 class CMDFallNpyWindow(NpyWindowFormatter):

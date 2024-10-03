@@ -81,8 +81,7 @@ class ParquetDatasetFormatter:
 
         # check if there's any NAN
         if np.isnan(data.to_numpy()).sum():
-            logger.error(f'NAN in data!! Skipping this file: {output_path}')
-            return False
+            raise ValueError(f'NAN in data: {output_path}')
 
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)
         data.write_parquet(output_path)
