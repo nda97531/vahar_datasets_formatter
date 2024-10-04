@@ -330,8 +330,7 @@ class UPFallParquet(ParquetDatasetFormatter):
                                              self.sampling_rates[UPFallConst.MODAL_SKELETON])
 
         # assign labels
-        inertial_df = inertial_df.set_sorted('timestamp(ms)')
-        skeleton_df = skeleton_df.set_sorted('timestamp(ms)')
+        assert label_df.get_column('timestamp(ms)').is_sorted()
         label_df = label_df.set_sorted('timestamp(ms)')
         inertial_df = inertial_df.join_asof(label_df, on='timestamp(ms)', strategy='nearest')
         skeleton_df = skeleton_df.join_asof(label_df, on='timestamp(ms)', strategy='nearest')

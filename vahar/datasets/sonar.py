@@ -162,7 +162,8 @@ class SonarParquet(ParquetDatasetFormatter):
         Returns:
             a list of uninterrupted dataframes
         """
-        df = df.sort('timestamp(ms)')
+        assert df.get_column('timestamp(ms)').is_sorted()
+        df = df.set_sorted('timestamp(ms)')
         label_df = df.select('timestamp(ms)', 'label')
         df = df.drop('label', *drop_col)
 
