@@ -479,7 +479,7 @@ class NpyWindowFormatter:
 
         result = []
         # for each session
-        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True)):
+        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True), total=len(parquet_sessions)):
             # get session info
             _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
 
