@@ -8,6 +8,7 @@ import polars as pl
 from loguru import logger
 from scipy.stats import mode
 import json
+from tqdm import tqdm
 from my_py_utils.my_py_utils.sliding_window import shifting_window, sliding_window
 from my_py_utils.my_py_utils.string_utils import rreplace
 
@@ -478,7 +479,7 @@ class NpyWindowFormatter:
 
         result = []
         # for each session
-        for parquet_session in parquet_sessions.iter_rows(named=True):
+        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True)):
             # get session info
             _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
 

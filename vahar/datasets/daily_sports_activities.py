@@ -152,20 +152,21 @@ class DailySportNpyWindow(NpyWindowFormatter):
 if __name__ == '__main__':
     parquet_dir = '/home/nda97531/Documents/dataset_parquet/DailySport'
 
-    # DailySportParquet(
-    #     raw_folder='/home/nda97531/Documents/daily+and+sports+activities',
-    #     destination_folder=parquet_dir,
-    #     sampling_rates={DailySportConst.MODAL_INERTIA: 50}
-    # ).run()
-
-    dataset_window = DailySportNpyWindow(
-        parquet_root_dir=parquet_dir,
-        window_size_sec=4,
-        step_size_sec=2,
-        modal_cols={
-            DailySportConst.MODAL_INERTIA: {
-                'acc': ['torso_acc_x(m/s^2)', 'torso_acc_y(m/s^2)', 'torso_acc_z(m/s^2)']
-            }
-        }
+    DailySportParquet(
+        raw_folder='/home/nda97531/Documents/daily+and+sports+activities',
+        destination_folder=parquet_dir,
+        sampling_rates={DailySportConst.MODAL_INERTIA: 50},
+        sensor_types=list(DailySportConst.COLS_BY_SENSOR_TYPES)
     ).run()
-    _ = 1
+
+    # dataset_window = DailySportNpyWindow(
+    #     parquet_root_dir=parquet_dir,
+    #     window_size_sec=4,
+    #     step_size_sec=2,
+    #     modal_cols={
+    #         DailySportConst.MODAL_INERTIA: {
+    #             'acc': ['torso_acc_x(m/s^2)', 'torso_acc_y(m/s^2)', 'torso_acc_z(m/s^2)']
+    #         }
+    #     }
+    # ).run()
+    # _ = 1
