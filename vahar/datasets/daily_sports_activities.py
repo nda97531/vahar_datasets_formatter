@@ -62,7 +62,6 @@ class DailySportParquet(ParquetDatasetFormatter):
         super().__init__(raw_folder, destination_folder, sampling_rates)
 
         self.label_dict = dict(zip(range(len(DailySportConst.LABEL_LIST)), DailySportConst.LABEL_LIST))
-        self.sensor_types = sensor_types
 
         self.selected_cols = []
         for ss_type, ss_type_cols in DailySportConst.COLS_BY_SENSOR_TYPES.items():
@@ -110,7 +109,7 @@ class DailySportParquet(ParquetDatasetFormatter):
         skipped_files = 0
 
         # for each session
-        for file in glob(os.sep.join([self.raw_folder, 'a*', 'p*', 's*.txt'])):
+        for file in sorted(glob(os.sep.join([self.raw_folder, 'a*', 'p*', 's*.txt']))):
             label, subject_id, segment_id = self.get_info_from_file_path(file)
             session_id = f'sub{subject_id}_cls{label}_seg{segment_id}'
 
@@ -119,7 +118,7 @@ class DailySportParquet(ParquetDatasetFormatter):
                 logger.info(f'Skipping session {session_id} because it has been done before.')
                 skipped_sessions += 1
                 continue
-            logger.info(f'Starting session {session_id}_sub{subject_id}')
+            logger.info(f'Starting session {session_id}')
 
             # read file
             df = self.read_raw_file(file)
