@@ -25,7 +25,8 @@ class RealWorldConst:
     # unsupported: 'mag', 'lig', 'mic', 'gps'
     SUBMODAL_SI_UNIT = {
         'acc': 'm/s^2',
-        'gyr': 'rad/s'
+        'gyr': 'rad/s',
+        'mag': '?'
     }
     RAW_MODALS: list
 
@@ -303,27 +304,27 @@ class RealWorldNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = f'/mnt/data_partition/UCD/dataset_processed/RealWorld_2s'
+    parquet_dir = f'/home/nda97531/Documents/dataset_parquet/RealWorld_4s'
 
-    # RealWorldParquet(
-    #     raw_folder='/mnt/data_partition/downloads/realworld2016_dataset',
-    #     destination_folder=parquet_dir,
-    #     sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
-    #     used_modals={RealWorldConst.MODAL_INERTIA: ['acc', 'gyr']},
-    #     sensor_pos=list(RealWorldConst.SENSOR_POSITION),
-    #     min_length_segment=4,
-    #     max_interval={'acc': 500, 'gyr': 500}
-    # ).run()
-
-    df = RealWorldNpyWindow(
-        parquet_root_dir=parquet_dir,
-        window_size_sec=2,
-        step_size_sec=1,
-        modal_cols={
-            RealWorldConst.MODAL_INERTIA: {
-                'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
-            }
-        }
+    RealWorldParquet(
+        raw_folder='/home/nda97531/Documents/realworld2016_dataset',
+        destination_folder=parquet_dir,
+        sampling_rates={RealWorldConst.MODAL_INERTIA: 50},
+        used_modals={RealWorldConst.MODAL_INERTIA: ['acc', 'gyr', 'mag']},
+        sensor_pos=list(RealWorldConst.SENSOR_POSITION),
+        min_length_segment=4,
+        max_interval={'acc': 500, 'gyr': 500, 'mag': 500}
     ).run()
-    df = df.dropna()
-    _ = 1
+
+    # df = RealWorldNpyWindow(
+    #     parquet_root_dir=parquet_dir,
+    #     window_size_sec=2,
+    #     step_size_sec=1,
+    #     modal_cols={
+    #         RealWorldConst.MODAL_INERTIA: {
+    #             'thigh': ['thigh_acc_x(m/s^2)', 'thigh_acc_y(m/s^2)', 'thigh_acc_z(m/s^2)']
+    #         }
+    #     }
+    # ).run()
+    # df = df.dropna()
+    # _ = 1
