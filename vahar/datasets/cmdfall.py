@@ -265,7 +265,7 @@ class CMDFallParquet(ParquetDatasetFormatter):
         sampling_rates = {key: self.sampling_rates[key.split('_')[0]] for key in data_dfs.keys()}
         segments = split_interrupted_dfs(
             data_dfs, max_interval=max_interval, min_length_segment=self.min_length_segment,
-            sampling_rates=sampling_rates
+            sampling_rates=sampling_rates, raise_neg_interval=False
         )
         return segments
 
@@ -390,20 +390,21 @@ class CMDFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/CMDFall20'
+    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/CMDFall_4s'
     inertial_freq = 50
     skeletal_freq = 20
-    window_size_sec = 3
-    step_size_sec = 1.5
-    min_step_size_sec = 0.5
 
     CMDFallParquet(
         raw_folder='/mnt/data_partition/downloads/CMDFall',
         destination_folder=parquet_dir,
         sampling_rates={CMDFallConst.MODAL_INERTIA: inertial_freq,
-                        CMDFallConst.MODAL_SKELETON: skeletal_freq}
+                        CMDFallConst.MODAL_SKELETON: skeletal_freq},
+        min_length_segment=4
     ).run()
 
+    # window_size_sec = 3
+    # step_size_sec = 1.5
+    # min_step_size_sec = 0.5
     # CMDFall = CMDFallNpyWindow(
     #     parquet_root_dir=parquet_dir,
     #     window_size_sec=window_size_sec,
