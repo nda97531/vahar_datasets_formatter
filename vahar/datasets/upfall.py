@@ -52,7 +52,11 @@ class UPFallConst:
 
         'label'
     ]
-    SELECTED_INERTIAL_COLS = [c for c in INERTIAL_COLS if c.endswith(('(ms)', '(m/s^2)', '(rad/s)'))]
+    SELECTED_INERTIAL_COLS = [
+        c for c in INERTIAL_COLS
+        if c.endswith(('(ms)', '(m/s^2)', '(rad/s)')) and (not c.startswith('pocket'))
+        # too many NaN values in pocket sensor
+    ]
 
     SKELETON_COLS = list(itertools.chain.from_iterable(
         [f'x_{joint}', f'y_{joint}'] for joint in
@@ -120,7 +124,7 @@ class UPFallParquet(ParquetDatasetFormatter):
             2 polars dataframes of the same length: sensor data and label
         """
         data_df = pl.read_csv(file_path, has_header=False, new_columns=UPFallConst.INERTIAL_COLS, skip_rows=2,
-                              dtypes=UPFallConst.INERTIAL_POLARS_DTYPES)
+                              schema_overrides=UPFallConst.INERTIAL_POLARS_DTYPES)
         logger.info(f'Raw inertia dataframe: {data_df.shape}')
 
         # convert timestamp to millisecond integer
@@ -195,7 +199,7 @@ class UPFallParquet(ParquetDatasetFormatter):
 
         # fill low conf joints by interpolation
         skel_frames = skel_frames.interpolate()
-        skel_frames = skel_frames.fillna(method='backfill')
+        skel_frames = skel_frames.bfill()
 
         # mid hip is always at origin (0, 0)
         assert not pd.isna(skel_frames.iloc[0, -len(UPFallConst.SKELETON_HIP_COLS):]).any(), 'Norm joints are nan!!'
@@ -416,20 +420,20 @@ class UPFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/UP-Fall_draft'
+    parquet_dir = '/home/nda97531/Documents/datasets/dataset_parquet/UP-Fall'
     inertial_freq = 50
     skeletal_freq = 20
+
+    # UPFallParquet(
+    #     raw_folder='/home/nda97531/Downloads/UPFall_wo_img/UP-Fall',
+    #     destination_folder=parquet_dir,
+    #     sampling_rates={UPFallConst.MODAL_INERTIA: inertial_freq,
+    #                     UPFallConst.MODAL_SKELETON: skeletal_freq}
+    # ).run()
+
     window_size_sec = 4
     step_size_sec = 1.5
     min_step_size_sec = 0.5
-
-    UPFallParquet(
-        raw_folder='/mnt/data_partition/downloads/UP-Fall',
-        destination_folder=parquet_dir,
-        sampling_rates={UPFallConst.MODAL_INERTIA: inertial_freq,
-                        UPFallConst.MODAL_SKELETON: skeletal_freq}
-    ).run()
-
     # upfall = UPFallNpyWindow(
     #     parquet_root_dir=parquet_dir,
     #     window_size_sec=window_size_sec,

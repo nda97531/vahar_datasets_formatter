@@ -77,7 +77,7 @@ CMDFallConst.define_att()
 class CMDFallParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
                  min_length_segment: float = 10,
-                 use_accelerometer: list = [1, 155]):
+                 use_accelerometer: list = (1, 155)):
         """
         Class for processing CMDFall dataset.
         Use only Inertial sensors and Camera 3.
@@ -269,7 +269,8 @@ class CMDFallParquet(ParquetDatasetFormatter):
         )
         return segments
 
-    def concat_sensors_to_modal(self, data_dict: dict) -> dict:
+    @staticmethod
+    def concat_sensors_to_modal(data_dict: dict) -> dict:
         """
         Concat DFs of the same sensor type (same modal);
         For example: concat [inertia_1, inertia_155] => inertia
