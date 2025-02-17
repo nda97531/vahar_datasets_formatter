@@ -13,7 +13,7 @@ from my_py_utils.my_py_utils.sliding_window import shifting_window, sliding_wind
 from my_py_utils.my_py_utils.string_utils import rreplace
 
 MODAL_PATH_PATTERN = '{root}/{modal}'
-PARQUET_PATH_PATTERN = MODAL_PATH_PATTERN + '/subject_{subject}/{session}.parquet'
+PARQUET_PATH_PATTERN = MODAL_PATH_PATTERN + '/subject_{subject}/{session}.{extension}'
 
 
 class ParquetDatasetFormatter:
@@ -40,7 +40,7 @@ class ParquetDatasetFormatter:
 
         self.label_dict: dict = {}
 
-    def get_output_file_path(self, modal, subject, session) -> str:
+    def get_output_file_path(self, modal, subject, session, extension='parquet') -> str:
         """
         Get path to an output file (.parquet)
 
@@ -48,15 +48,17 @@ class ParquetDatasetFormatter:
             modal: modality
             subject: subject ID
             session: session ID
+            extension: file extension
 
         Returns:
             path to parquet file
         """
         p = PARQUET_PATH_PATTERN.format(root=self.destination_folder, modal=modal, subject=subject,
-                                        session=session)
+                                        session=session, extension=extension)
         return p
 
-    def write_output_parquet(self, data: pl.DataFrame, modal: str, subject: any, session: any) -> bool:
+    def write_output_parquet(self, data: pl.DataFrame, modal: str, subject: any, session: any,
+                             nan_cols=tuple(), check_interval=True) -> bool:
         """
         Write a processed DataFrame of 1 modality, 1 session
 
@@ -65,6 +67,8 @@ class ParquetDatasetFormatter:
             modal: modality name (e.g. accelerometer, skeleton)
             subject: subject name/ID
             session: session ID
+            nan_cols: columns that are allowed to have NaNs or None
+            check_interval: whether to check interval between samples
 
         Returns:
             boolean, file written successfully or not
@@ -72,16 +76,17 @@ class ParquetDatasetFormatter:
         assert 'label' in data.columns, 'No "label" column in output DF'
         assert 'timestamp(ms)' in data.columns, 'No "timestamp(ms)" column in output DF'
 
-        df_interval = data.item(1, 'timestamp(ms)') - data.item(0, 'timestamp(ms)')
-        expected_interval = 1 / self.sampling_rates[modal]
-        assert df_interval == expected_interval, \
-            (f'Unexpected timestamp interval in output DF. '
-             f'Expected: {expected_interval}(ms), but actual: {df_interval}(ms)')
+        if check_interval:
+            df_interval = data.item(1, 'timestamp(ms)') - data.item(0, 'timestamp(ms)')
+            expected_interval = 1 / self.sampling_rates[modal]
+            assert df_interval == expected_interval, \
+                (f'Unexpected timestamp interval in output DF. '
+                 f'Expected: {expected_interval}(ms), but actual: {df_interval}(ms)')
 
         output_path = self.get_output_file_path(modal=modal, subject=subject, session=session)
 
         # check if there's any NAN
-        if np.isnan(data.to_numpy()).sum():
+        if np.isnan(data.drop(nan_cols).to_numpy()).sum():
             raise ValueError(f'NAN in data: {output_path}')
 
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)
@@ -89,15 +94,16 @@ class ParquetDatasetFormatter:
         logger.info(f'Parquet shape {data.shape} written: {output_path}')
         return True
 
-    def export_label_list(self, label_dict: dict = None):
+    def export_label_list(self, label_dict: dict = None, filename='label_list.json'):
         """
         Write label list to a JSON file.
 
         Args:
             label_dict: the dict to save to file, if not specified, use self.label_dict
+            filename: output filename
         """
         assert self.label_dict or label_dict, 'Class dict not defined.'
-        output_path = f'{self.destination_folder}/label_list.json'
+        output_path = f'{self.destination_folder}/{filename}'
         if os.path.isfile(output_path):
             logger.info('Skipping label list before it has been written before.')
             return
@@ -209,7 +215,7 @@ class NpyWindowFormatter:
         # glob first modal
         first_modal_parquets = sorted(glob(PARQUET_PATH_PATTERN.format(
             root=self.parquet_root_dir,
-            modal=modals[0], subject=subject_pattern, session=session_pattern
+            modal=modals[0], subject=subject_pattern, session=session_pattern, extension='parquet'
         )))
         if len(modals) == 1:
             return pl.DataFrame({modals[0]: first_modal_parquets})
@@ -218,7 +224,7 @@ class NpyWindowFormatter:
         for modal in modals[1:]:
             next_modal_parquets = glob(PARQUET_PATH_PATTERN.format(
                 root=self.parquet_root_dir,
-                modal=modal, subject=subject_pattern, session=session_pattern
+                modal=modal, subject=subject_pattern, session=session_pattern, extension='parquet'
             ))
             assert len(first_modal_parquets) == len(next_modal_parquets), \
                 f'{modals[0]} has {len(first_modal_parquets)} parquet files but {modal} has {len(next_modal_parquets)}'
@@ -249,7 +255,7 @@ class NpyWindowFormatter:
         """
         info = re.search(PARQUET_PATH_PATTERN.format(
             root=self.parquet_root_dir,
-            modal='(.*)', subject='(.*)', session='(.*)'
+            modal='(.*)', subject='(.*)', session='(.*)', extension='parquet'
         ), parquet_path)
         info = tuple(info.group(i) for i in range(1, 4))
         return info
@@ -273,9 +279,9 @@ class NpyWindowFormatter:
         """
         # calculate window size row from window size sec
         # Hz can be calculated from first 2 rows because this DF is already interpolated (constant interval timestamps)
-        df_sampling_rate = df.head(2).get_column('timestamp(ms)').to_list()
-        df_sampling_rate = 1000 / (df_sampling_rate[1] - df_sampling_rate[0])
-        window_size_row = int(self.window_size_sec * df_sampling_rate)
+        df_secs = (df.item(-1, 'timestamp(ms)') - df.item(0, 'timestamp(ms)')) / 1000
+        df_sampling_rate = (len(df) - 1) / df_secs
+        window_size_row = round(self.window_size_sec * df_sampling_rate)
 
         # convert data from DataFrame to numpy array
         arr = df.to_numpy()
@@ -397,10 +403,10 @@ class NpyWindowFormatter:
         Process from parquet files of ONE session to window data (np array).
 
         Args:
-            parquet_session: dict with keys are modal names, values are parquet file paths
+            parquet_session: dict with keys are modal names, values are parquet file paths or dataframes
             subject: subject ID
             session_label: main label of this session
-            is_short_activity: whether this session is of short activities
+            is_short_activity: whether the main label of this session is short activities
 
         Returns:
             a dict, keys are all sub-modal names of a session, 'subject' and 'label';
@@ -422,11 +428,11 @@ class NpyWindowFormatter:
         min_num_windows = float('inf')
 
         # for each modal, run sliding window
-        for modal, parquet_file in parquet_session.items():
+        for modal, parquet in parquet_session.items():
             if modal not in self.modal_cols:
                 continue
             # read DF
-            df = pl.read_parquet(parquet_file)
+            df = parquet if isinstance(parquet, pl.DataFrame) else pl.read_parquet(parquet)
             # sliding window
             windows, windows_label = self.slide_windows_from_modal_df(df=df, session_label=session_label,
                                                                       is_short_activity=is_short_activity)
