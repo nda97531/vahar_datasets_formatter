@@ -20,7 +20,23 @@ class SeizeIT2Const:
     MODAL_ELECTRO = 'electro'
     MODAL_INERTIA = 'inertia'
 
-    CHANNEL_NAME_MAPPING = {
+    SUBMODAL_COL = {
+        'electro': {
+            'eegLeft': ['eegLeft'],
+            'eegRight': ['eegRight'],
+            'eegCross': ['eegCross'],
+            'ecg': ['ecg'],
+            'emg': ['emg']
+        },
+        'inertia': {
+            'headAcc': ['headAccX', 'headAccY'],
+            'headGyr': ['headGyrX', 'headGyrY', 'headGyrZ'],
+            'torsoAcc': ['torsoAccX', 'torsoAccY'],
+            'torsoGyr': ['torsoGyrX', 'torsoGyrY', 'torsoGyrZ']
+        }
+    }
+
+    CHANNEL_RENAME = {
         'BTEleft SD': 'eegLeft',
         'BTEright SD': 'eegRight',
         'CROSStop SD': 'eegCross',
@@ -130,7 +146,7 @@ class SeizeIT2Parquet(ParquetDatasetFormatter):
                 for i, channel_name in enumerate(channel_names):
                     if channel_name.endswith('ACC Z'):
                         continue
-                    channel_name = SeizeIT2Const.CHANNEL_NAME_MAPPING[channel_name]
+                    channel_name = SeizeIT2Const.CHANNEL_RENAME[channel_name]
                     if modal == 'mov':
                         inertial_data[channel_name] = edf.readSignal(i)
                         if inertial_sampling_rate is None:
@@ -273,6 +289,7 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
     """
     This class saves processed data as numpy arrays of windows.
     """
+
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict = None,
                  read_modals=('eeg', 'ecg', 'emg', 'mov'),
 
@@ -282,10 +299,15 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
         SeizeIT2Parquet.__init__(self, raw_folder, destination_folder, sampling_rates, read_modals)
         NpyWindowFormatter.__init__(self, None, window_size_sec, step_size_sec,
                                     min_step_size_sec, max_short_window, exclude_labels, no_transition,
-                                    modal_cols={SeizeIT2Const.MODAL_ELECTRO: None, SeizeIT2Const.MODAL_INERTIA: None})
+                                    modal_cols=SeizeIT2Const.SUBMODAL_COL)
 
         self.OUTPUT_PATTERN = '{root}/{modal}/subject_{subject}/{session}_{columns}_{num_window}.npy'
         self.label_dict = {0: 'null', 1: 'seizure'}
+
+        self.submodal_shape = {}
+        for modal, col_map in SeizeIT2Const.SUBMODAL_COL.items():
+            for submodal, cols in col_map.items():
+                self.submodal_shape[submodal] = [int(window_size_sec * self.sampling_rates[modal] * 1000), len(cols)]
 
     @staticmethod
     def format_annotation_df(event_df: pl.DataFrame, total_duration, start_col='onset', end_col='end') -> pl.DataFrame:
@@ -475,7 +497,6 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
             # split session into segments of the same events (same labels),
             # so different step size can be run for each label in sliding window
             data = self.split_by_label(data, subject_id, run_id)
-            has_event = int(len(data) > 1)
 
             # sliding window
             session_data = defaultdict(list)
@@ -489,6 +510,7 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
                 )
                 for key, arr in seg.items():
                     session_data[key].append(arr)
+            del data, seg, arr, continuous_seg
 
             # concat window segments
             for key in list(session_data.keys()):
@@ -496,24 +518,34 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
                     session_data.pop(key)
                     continue
                 if key == 'label':
-                    value = np.concatenate(session_data[key]).astype(bool)
+                    session_data[key] = np.concatenate(session_data[key]).astype(bool)
                 else:
-                    value = np.concatenate(session_data[key], dtype=np.float32)
-                session_data[key] = value
+                    session_data[key] = np.concatenate(session_data[key], dtype=np.float32)
 
-            # add data column names
-            session_data |= {
-                f'{modal}_columns': np.array([c for c in df.columns if c not in {'timestamp(ms)', 'label'}])
-                for modal, df in continuous_seg.items()
-            }
+            # fill missing submodals with NaN
+            for submodal, submodal_shape in self.submodal_shape.items():
+                if submodal not in session_data.keys():
+                    logger.info(f'Filling {submodal} with shape {submodal_shape}.')
+                    session_data[submodal] = np.full(
+                        shape=[len(session_data['label']), *submodal_shape],
+                        fill_value=np.nan,
+                        dtype=np.float32
+                    )
 
-            # write NPZ file
-            written = self.write_output_npz(
-                session_data, modal='all_modal', subject_id=subject_id_int,
-                session_id=session_id.format(n_window=len(session_data['label']), is_event=has_event),
-            )
-            written_files += int(written)
-            skipped_files += int(not written)
+            # write event and non-event in separate files
+            for label in [True, False]:
+                mask = session_data['label'] == label
+                n_window = np.sum(mask)
+                if n_window > 0:
+                    # write NPZ file
+                    written = self.write_output_npz(
+                        {k: v[mask]
+                         for k, v in session_data.items()},
+                        modal='all_modal', subject_id=subject_id_int,
+                        session_id=session_id.format(n_window=n_window, is_event=int(label)),
+                    )
+                    written_files += int(written)
+                    skipped_files += int(not written)
 
         logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
                     f'{skipped_files} file(s) not written.')
