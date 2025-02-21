@@ -267,7 +267,7 @@ class NpyWindowFormatter:
         If main activity of the session is a short activity, run shifting window instead.
 
         Args:
-            df: Dataframe with 'timestamp(ms)' and 'label' columns, others are feature columns
+            df: Dataframe with 'timestamp(ms)' column, 'label' column (optional), and others are feature columns
             session_label: main label of this session, only used if `is_short_activity` is True
             is_short_activity: whether this session is of short activities.
                 Only support short activities of ONE label in a session
@@ -275,7 +275,7 @@ class NpyWindowFormatter:
         Returns:
             a tuple of 2 elements:
                 - data array shape [num windows, window length, features]
-                - label array shape [num windows]
+                - label array shape [num windows]; None if there's no 'label' column in the dataframe.
         """
         # calculate window size row from window size sec
         # Hz can be calculated from first 2 rows because this DF is already interpolated (constant interval timestamps)
@@ -285,22 +285,29 @@ class NpyWindowFormatter:
 
         # convert data from DataFrame to numpy array
         arr = df.to_numpy()
-        label_col_idx = df.columns.index('label')
-        label_arr = df.get_column('label').to_numpy()
+        process_label = 'label' in df.columns
+        if process_label:
+            label_col_idx = df.columns.index('label')
+            label_arr = df.get_column('label').to_numpy()
         del df
 
         # pad DF with zeros
         padded = False
         if self.pad_short_session and (len(arr) < window_size_row):
-            assert not np.isnan(label_arr).any(), 'NaN value in label array'
             trailing_row = [0] * arr.shape[1]
-            trailing_row[label_col_idx] = float('nan')
+
+            if process_label:
+                # padded rows will have NaN label, so existing rows cannot have NaN to avoid confusion/bug
+                assert not np.isnan(label_arr).any(), 'NaN value in label array'
+                trailing_row[label_col_idx] = float('nan')
+
             trailing_arr = np.array([trailing_row] * (window_size_row - len(arr)))
             arr = np.concatenate([arr, trailing_arr], axis=0)
             padded = True
 
         # if this is a session of short activity, run shifting window
         if is_short_activity:
+            assert process_label, 'Label needed to run short activity.'
             min_step_size_row = int(self.min_step_size_sec * df_sampling_rate)
 
             # find short activity indices
@@ -326,30 +333,33 @@ class NpyWindowFormatter:
             step_size_row = int(self.step_size_sec * df_sampling_rate)
             windows = sliding_window(arr, window_size=window_size_row, step_size=step_size_row)
 
-            # vote 1 label for each window
-            windows_label = windows[:, :, label_col_idx]
-            windows_label = windows_label.round() if padded else windows_label.astype(int)
+            if process_label:
+                # vote 1 label for each window
+                windows_label = windows[:, :, label_col_idx]
+                windows_label = windows_label.round() if padded else windows_label.astype(int)
 
-            if self.no_transition:
-                # drop windows containing label transitions
-                no_trans_idx = np.array([len(np.unique(windows_label[i])) == 1 for i in range(len(windows_label))])
-                windows = windows[no_trans_idx]
-                windows_label = windows_label[no_trans_idx]
-            if len(self.exclude_labels):
-                # drop windows containing disallowed labels
-                keep_idx = ~np.array([any(lb in row for lb in self.exclude_labels) for row in windows_label])
-                windows = windows[keep_idx]
-                windows_label = windows_label[keep_idx]
+                if self.no_transition:
+                    # drop windows containing label transitions
+                    no_trans_idx = np.array([len(np.unique(windows_label[i])) == 1 for i in range(len(windows_label))])
+                    windows = windows[no_trans_idx]
+                    windows_label = windows_label[no_trans_idx]
+                if len(self.exclude_labels):
+                    # drop windows containing disallowed labels
+                    keep_idx = ~np.array([any(lb in row for lb in self.exclude_labels) for row in windows_label])
+                    windows = windows[keep_idx]
+                    windows_label = windows_label[keep_idx]
 
-            if padded:
-                windows_label = mode(windows_label, axis=-1, nan_policy='omit', keepdims=False).mode
-                windows_label = windows_label.astype(int)
+                if padded:
+                    windows_label = mode(windows_label, axis=-1, nan_policy='omit', keepdims=False).mode
+                    windows_label = windows_label.astype(int)
+                else:
+                    windows_label = mode(windows_label, axis=-1, nan_policy='raise', keepdims=False).mode
             else:
-                windows_label = mode(windows_label, axis=-1, nan_policy='raise', keepdims=False).mode
+                windows_label = None
 
         return windows, windows_label
 
-    def distribute_submodal_features(self, windows: np.ndarray, windows_label: np.ndarray,
+    def distribute_submodal_features(self, windows: np.ndarray, windows_label: Union[np.ndarray, None],
                                      col_names: list, modality: str):
         """
         Split the full-feature array into an array for each submodal.
@@ -440,7 +450,7 @@ class NpyWindowFormatter:
                                                         col_names=df.columns, modality=modal)
 
             # append result of this modal
-            min_num_windows = min(min_num_windows, len(windows['label']))
+            min_num_windows = min(min_num_windows, len(windows[list(windows.keys())[0]]))
             modal_labels.append(windows.pop('label'))
             session_result.update(windows)
 
@@ -451,13 +461,14 @@ class NpyWindowFormatter:
         session_result['subject'] = int(subject)
 
         # check if label of all modals are the same
-        for modal_label in modal_labels[1:]:
-            diff_lb = modal_label[:min_num_windows] != modal_labels[0][:min_num_windows]
-            if diff_lb.any():
-                modal_labels[0][:min_num_windows] = np.maximum(modal_labels[0][:min_num_windows],
-                                                               modal_label[:min_num_windows])
-        # add label info; only need to take labels of the first modal because all modalities have the same labels
-        session_result['label'] = modal_labels[0][:min_num_windows]
+        if modal_labels[0] is not None:
+            for modal_label in modal_labels[1:]:
+                diff_lb = modal_label[:min_num_windows] != modal_labels[0][:min_num_windows]
+                if diff_lb.any():
+                    modal_labels[0][:min_num_windows] = np.maximum(modal_labels[0][:min_num_windows],
+                                                                   modal_label[:min_num_windows])
+            # add label info; only need to take labels of the first modal because all modalities have the same labels
+            session_result['label'] = modal_labels[0][:min_num_windows]
 
         # only print column names for the first session
         self.verbose = False

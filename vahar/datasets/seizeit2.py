@@ -8,6 +8,7 @@ from glob import glob
 import orjson
 import re
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df
+from my_py_utils.my_py_utils.time_utils import TimeThis
 
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
@@ -402,7 +403,7 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
             run_id: run ID.
 
         Returns:
-            list of dict, each dict has the same format as the input; each dataframe has an extra column 'label'.
+            list of dict, each dict has the same format as the input with an extra key 'label'.
         """
         # read annotation file
         events = pl.read_csv(
@@ -417,8 +418,7 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
 
         # return if there's no event
         if len(events) == 0:
-            for modal in df_dict.keys():
-                df_dict[modal] = df_dict[modal].with_columns(label=pl.lit(0))
+            df_dict['label'] = False
             return [df_dict]
 
         # check event types
@@ -436,10 +436,10 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
         results = []
         for i, event in enumerate(events.iter_rows(named=True)):
             data_df = {
-                modal: df.filter(pl.col('timestamp(ms)').is_between(event['onset'], event['end'], closed='left')) \
-                    .with_columns(label=pl.lit(event['label']))
+                modal: df.filter(pl.col('timestamp(ms)').is_between(event['onset'], event['end'], closed='left'))
                 for modal, df in df_dict.items()
             }
+            data_df['label'] = event['label']
             results.append(data_df)
 
         return results
@@ -499,15 +499,15 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
             # sliding window
             session_data = defaultdict(list)
             for continuous_seg in data:
-                seg_label = continuous_seg[list(continuous_seg)[0]].item(0, 'label')
                 seg = self.parquet_to_windows(
                     parquet_session=continuous_seg,
-                    subject=subject_id_int,
-                    session_label=seg_label,
-                    is_short_activity=bool(seg_label)  # run short activity if this is a seizure event
+                    subject=subject_id_int
                 )
                 for key, arr in seg.items():
                     session_data[key].append(arr)
+                    if key != 'subject':
+                        num_window = len(arr)
+                session_data['label'].append([continuous_seg['label']] * num_window)
             del data, seg, arr, continuous_seg
 
             # concat window segments
