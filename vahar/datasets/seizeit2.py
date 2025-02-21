@@ -457,12 +457,10 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
         Returns:
             bool indicating success.
         """
-        assert 'label' in arr_dict
-
         output_path = self.get_output_file_path(modal=modal, subject=subject_id, session=session_id, extension='npz')
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)
         np.savez_compressed(output_path, **arr_dict)
-        logger.info(f'Npz written with {len(arr_dict["label"])} windows: {output_path}')
+        logger.info(f'Npz written with {len(arr_dict["ecg"])} windows: {output_path}')
         return True
 
     def run(self):
@@ -540,7 +538,8 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
                     # write NPZ file
                     written = self.write_output_npz(
                         {k: v[mask]
-                         for k, v in session_data.items()},
+                         for k, v in session_data.items()
+                         if k != 'label'},
                         modal='all_modal', subject_id=subject_id_int,
                         session_id=session_id.format(n_window=n_window, is_event=int(label)),
                     )
