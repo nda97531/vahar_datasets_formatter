@@ -9,10 +9,7 @@ from glob import glob
 import orjson
 import re
 
-from tqdm import tqdm
-
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df
-from my_py_utils.my_py_utils.time_utils import TimeThis
 
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
@@ -60,6 +57,8 @@ class SeizeIT2Const:
         'ECGEMG SD GYR B': 'torsoGyrY',
         'ECGEMG SD GYR C': 'torsoGyrZ',
     }
+
+    PARQUET_SESSION_PATTERN = 'run-{run_id}_split-{split}_row-{row}_freq-{freq}_event-{event}'
 
 
 class SeizeIT2Parquet(ParquetDatasetFormatter):
@@ -336,18 +335,21 @@ class SeizeIT2Parquet(ParquetDatasetFormatter):
         skipped_files = 0
 
         # for each session
-        for eeg_file in tqdm(sorted(glob(os.sep.join([self.raw_folder, 'sub*', 'ses-01', 'eeg', '*.edf'])))):
+        for eeg_file in sorted(glob(os.sep.join([self.raw_folder, 'sub*', 'ses-01', 'eeg', '*.edf']))):
             subject_id, run_id = self.get_info_from_file_path(eeg_file)
-            session_id = f'{run_id}_split-{{split}}_freq-{{freq}}_event-{{event}}'
+            session_id = SeizeIT2Const.PARQUET_SESSION_PATTERN.format(
+                run_id=run_id.removeprefix('run-'),
+                split='{split}', row='{row}', freq='{freq}', event='{event}'
+            )
 
             # check if already run before
             subject_id_int = int(subject_id.removeprefix('sub-'))
             if bool(glob(self.get_output_file_path(
                     SeizeIT2Const.MODAL_INERTIA, subject_id_int,
-                    session_id.format(split='*', freq='*', event='*')
+                    session_id.format(split='*', row='*', freq='*', event='*')
             ))) and bool(glob(self.get_output_file_path(
                     SeizeIT2Const.MODAL_ELECTRO, subject_id_int,
-                    session_id.format(split='*', freq='*', event='*')
+                    session_id.format(split='*', row='*', freq='*', event='*')
             ))):
                 logger.info(f'Skipping session {subject_id}_{run_id} because it has been done before.')
                 skipped_sessions += 1
@@ -368,7 +370,8 @@ class SeizeIT2Parquet(ParquetDatasetFormatter):
                     df = df.select(pl.exclude('timestamp(ms)'))
                     written = self.write_output_parquet(
                         df, modal, subject_id_int,
-                        session_id.format(split=i, freq=int(self.sampling_rates[modal] * 1000), event=int(label)),
+                        session_id.format(split=i, row=len(df),
+                                          freq=int(self.sampling_rates[modal] * 1000), event=int(label)),
                         check_interval=(modal == SeizeIT2Const.MODAL_INERTIA),
                         check_label_ts=False
                     )
@@ -380,39 +383,6 @@ class SeizeIT2Parquet(ParquetDatasetFormatter):
 
         # convert labels from text to numbers
         self.export_label_list()
-
-
-class SeizeIT2NpyWindow(NpyWindowFormatter):
-    def run(self) -> pd.DataFrame:
-        """
-        Main processing method
-
-        Returns:
-            a DF, each row is a session, columns are:
-                - 'subject': subject ID
-                - '<modality 1>': array shape [num window, window length, features]
-                - '<modality 2>': ...
-                - 'label': array shape [num window]
-        """
-        # to override:
-        # step 1: call self.get_parquet_file_list() to get data parquet file paths of all sessions
-        # for each session:
-        # step 2: call self.get_parquet_session_info() to get session info if needed
-        # step 3: call self.parquet_to_windows() to run sliding window on each session
-
-        # get list of parquet files
-        parquet_sessions = self.get_parquet_file_list()
-
-        result = []
-        # for each session
-        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True), total=len(parquet_sessions)):
-            # get session info
-            _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
-
-            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
-            result.append(session_result)
-        result = pd.DataFrame(result)
-        return result
 
 
 class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
@@ -552,3 +522,4 @@ if __name__ == '__main__':
         destination_folder='/mnt/data_partition/downloads/parquet_dataset/seizeit2',
         read_modals=['eeg', 'ecg', 'emg', 'mov']
     ).run()
+    _=1

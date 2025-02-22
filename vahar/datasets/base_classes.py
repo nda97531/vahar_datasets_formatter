@@ -264,7 +264,8 @@ class NpyWindowFormatter:
 
     def slide_windows_from_modal_df(self, df: pl.DataFrame, session_label: int = None,
                                     is_short_activity=False,
-                                    step_size_sec: float = None) -> Tuple[np.ndarray, np.ndarray]:
+                                    step_size_sec: float = None,
+                                    df_freq: float = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Slide windows from 1 session dataframe of 1 modal.
         If main activity of the session is a short activity, run shifting window instead.
@@ -275,6 +276,7 @@ class NpyWindowFormatter:
             is_short_activity: whether this session is of short activities.
                 Only support short activities of ONE label in a session
             step_size_sec: if given, override self.step_size_sec
+            df_freq: sampling rate of the DF in Hz; infer from column 'timestamp(ms)' if not specified
 
         Returns:
             a tuple of 2 elements:
@@ -283,9 +285,10 @@ class NpyWindowFormatter:
         """
         # calculate window size row from window size sec
         # Hz can be calculated from first 2 rows because this DF is already interpolated (constant interval timestamps)
-        df_secs = (df.item(-1, 'timestamp(ms)') - df.item(0, 'timestamp(ms)')) / 1000
-        df_sampling_rate = (len(df) - 1) / df_secs
-        window_size_row = round(self.window_size_sec * df_sampling_rate)
+        if df_freq is None:
+            df_secs = (df.item(-1, 'timestamp(ms)') - df.item(0, 'timestamp(ms)')) / 1000
+            df_freq = (len(df) - 1) / df_secs
+        window_size_row = round(self.window_size_sec * df_freq)
 
         # convert data from DataFrame to numpy array
         arr = df.to_numpy()
@@ -312,7 +315,7 @@ class NpyWindowFormatter:
         # if this is a session of short activity, run shifting window
         if is_short_activity:
             assert process_label, 'Label needed to run short activity.'
-            min_step_size_row = int(self.min_step_size_sec * df_sampling_rate)
+            min_step_size_row = int(self.min_step_size_sec * df_freq)
 
             # find short activity indices
             bin_label = label_arr == session_label
@@ -334,7 +337,7 @@ class NpyWindowFormatter:
 
         # if this is a session of long activity, run sliding window
         else:
-            step_size_row = int((step_size_sec or self.step_size_sec) * df_sampling_rate)
+            step_size_row = int((step_size_sec or self.step_size_sec) * df_freq)
             windows = sliding_window(arr, window_size=window_size_row, step_size=step_size_row)
 
             if process_label:
@@ -363,14 +366,12 @@ class NpyWindowFormatter:
 
         return windows, windows_label
 
-    def distribute_submodal_features(self, windows: np.ndarray, windows_label: Union[np.ndarray, None],
-                                     col_names: list, modality: str):
+    def distribute_submodal_features(self, windows: np.ndarray, col_names: list, modality: str):
         """
         Split the full-feature array into an array for each submodal.
 
         Args:
             windows: data array with shape [num windows, window length, features]
-            windows_label: label array with shape [num windows]
             col_names: names for columns in `windows`
             modality: data modality of this session
 
@@ -390,8 +391,10 @@ class NpyWindowFormatter:
             if feature_cols is None:
                 # get all feature cols by default
                 list_idx = list(range(len(col_names)))
-                list_idx.remove(col_names.index('timestamp(ms)'))
-                list_idx.remove(col_names.index('label'))
+                if 'timestamp(ms)' in col_names:
+                    list_idx.remove(col_names.index('timestamp(ms)'))
+                if 'label' in col_names:
+                    list_idx.remove(col_names.index('label'))
                 sub_modals_col_idx[submodal] = list_idx
             else:
                 # get specified cols; if one column is missing, return empty
@@ -407,12 +410,11 @@ class NpyWindowFormatter:
         result = {sub_modal: windows[:, :, sub_modal_col_idx]
                   for sub_modal, sub_modal_col_idx in sub_modals_col_idx.items()
                   if sub_modal_col_idx}
-        result['label'] = windows_label
-
         return result
 
     def parquet_to_windows(self, parquet_session: dict, subject: any, session_label: int = None,
-                           is_short_activity: bool = False, step_size_sec: float = None) -> dict:
+                           is_short_activity: bool = False,
+                           step_size_sec: float = None, modal_freqs: dict = None) -> dict:
         """
         Process from parquet files of ONE session to window data (np array).
 
@@ -422,6 +424,8 @@ class NpyWindowFormatter:
             session_label: main label of this session
             is_short_activity: whether the main label of this session is short activities
             step_size_sec: if given, override self.step_size_sec
+            modal_freqs: dict containing sampling rate of each modal in Hz;
+                infer from column 'timestamp(ms)' if not specified
 
         Returns:
             a dict, keys are all sub-modal names of a session, 'subject' and 'label';
@@ -449,14 +453,21 @@ class NpyWindowFormatter:
             # read DF
             df = parquet if isinstance(parquet, pl.DataFrame) else pl.read_parquet(parquet)
             # sliding window
-            windows, windows_label = self.slide_windows_from_modal_df(df=df, session_label=session_label,
-                                                                      is_short_activity=is_short_activity,
-                                                                      step_size_sec=step_size_sec)
-            windows = self.distribute_submodal_features(windows=windows, windows_label=windows_label,
-                                                        col_names=df.columns, modality=modal)
+            windows, windows_label = self.slide_windows_from_modal_df(
+                df=df,
+                session_label=session_label,
+                is_short_activity=is_short_activity,
+                step_size_sec=step_size_sec,
+                df_freq=None if modal_freqs is None else modal_freqs[modal]
+            )
+            windows = self.distribute_submodal_features(windows=windows, col_names=df.columns, modality=modal)
+            windows['label'] = windows_label
 
             # append result of this modal
-            min_num_windows = min(min_num_windows, len(windows[list(windows.keys())[0]]))
+            num_windows = len(windows[list(windows.keys())[0]])
+            if min_num_windows != float('inf'):
+                assert abs(num_windows - min_num_windows) < int(self.window_size_sec / self.step_size_sec)
+            min_num_windows = min(min_num_windows, num_windows)
             modal_labels.append(windows.pop('label'))
             session_result.update(windows)
 
