@@ -58,7 +58,7 @@ class ParquetDatasetFormatter:
         return p
 
     def write_output_parquet(self, data: pl.DataFrame, modal: str, subject: any, session: any,
-                             nan_cols=tuple(), check_interval=True) -> bool:
+                             nan_cols=tuple(), check_interval=True, check_label_ts=True) -> bool:
         """
         Write a processed DataFrame of 1 modality, 1 session
 
@@ -69,14 +69,16 @@ class ParquetDatasetFormatter:
             session: session ID
             nan_cols: columns that are allowed to have NaNs or None
             check_interval: whether to check interval between samples
+            check_label_ts: whether to check if 'label' and 'timestamp(ms)' are columns in the DF
 
         Returns:
             boolean, file written successfully or not
         """
-        assert 'label' in data.columns, 'No "label" column in output DF'
-        assert 'timestamp(ms)' in data.columns, 'No "timestamp(ms)" column in output DF'
+        if check_label_ts:
+            assert 'label' in data.columns, 'No "label" column in output DF'
+            assert 'timestamp(ms)' in data.columns, 'No "timestamp(ms)" column in output DF'
 
-        if check_interval:
+        if check_interval and ('timestamp(ms)' in data.columns):
             df_interval = data.item(1, 'timestamp(ms)') - data.item(0, 'timestamp(ms)')
             expected_interval = 1 / self.sampling_rates[modal]
             assert df_interval == expected_interval, \
@@ -261,7 +263,8 @@ class NpyWindowFormatter:
         return info
 
     def slide_windows_from_modal_df(self, df: pl.DataFrame, session_label: int = None,
-                                    is_short_activity: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+                                    is_short_activity=False,
+                                    step_size_sec: float = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Slide windows from 1 session dataframe of 1 modal.
         If main activity of the session is a short activity, run shifting window instead.
@@ -271,6 +274,7 @@ class NpyWindowFormatter:
             session_label: main label of this session, only used if `is_short_activity` is True
             is_short_activity: whether this session is of short activities.
                 Only support short activities of ONE label in a session
+            step_size_sec: if given, override self.step_size_sec
 
         Returns:
             a tuple of 2 elements:
@@ -330,7 +334,7 @@ class NpyWindowFormatter:
 
         # if this is a session of long activity, run sliding window
         else:
-            step_size_row = int(self.step_size_sec * df_sampling_rate)
+            step_size_row = int((step_size_sec or self.step_size_sec) * df_sampling_rate)
             windows = sliding_window(arr, window_size=window_size_row, step_size=step_size_row)
 
             if process_label:
@@ -408,7 +412,7 @@ class NpyWindowFormatter:
         return result
 
     def parquet_to_windows(self, parquet_session: dict, subject: any, session_label: int = None,
-                           is_short_activity: bool = False) -> dict:
+                           is_short_activity: bool = False, step_size_sec: float = None) -> dict:
         """
         Process from parquet files of ONE session to window data (np array).
 
@@ -417,6 +421,7 @@ class NpyWindowFormatter:
             subject: subject ID
             session_label: main label of this session
             is_short_activity: whether the main label of this session is short activities
+            step_size_sec: if given, override self.step_size_sec
 
         Returns:
             a dict, keys are all sub-modal names of a session, 'subject' and 'label';
@@ -445,7 +450,8 @@ class NpyWindowFormatter:
             df = parquet if isinstance(parquet, pl.DataFrame) else pl.read_parquet(parquet)
             # sliding window
             windows, windows_label = self.slide_windows_from_modal_df(df=df, session_label=session_label,
-                                                                      is_short_activity=is_short_activity)
+                                                                      is_short_activity=is_short_activity,
+                                                                      step_size_sec=step_size_sec)
             windows = self.distribute_submodal_features(windows=windows, windows_label=windows_label,
                                                         col_names=df.columns, modality=modal)
 

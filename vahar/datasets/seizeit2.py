@@ -1,12 +1,16 @@
 import os
 from collections import defaultdict
 import numpy as np
+import pandas as pd
 import pyedflib
 from loguru import logger
 import polars as pl
 from glob import glob
 import orjson
 import re
+
+from tqdm import tqdm
+
 from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df
 from my_py_utils.my_py_utils.time_utils import TimeThis
 
@@ -192,124 +196,6 @@ class SeizeIT2Parquet(ParquetDatasetFormatter):
 
         return results
 
-    def add_label_col(self, df_dict: dict[str, pl.DataFrame], subject_id: str, run_id: str) -> dict[str, pl.DataFrame]:
-        """
-        Add label column to modal dataframes of the same session.
-
-        Args:
-            df_dict: dict[modal name] = df
-            subject_id: subject ID.
-            run_id: run ID.
-
-        Returns:
-            same format as df_dict.
-        """
-        df_dict = {
-            modal: df.with_columns(label=0, lateralization=None)
-            for modal, df in df_dict.items()
-        }
-
-        # read annotation file
-        events = pl.read_csv(
-            os.path.join(
-                self.raw_folder, subject_id, 'ses-01', 'eeg',
-                '_'.join([subject_id, 'ses-01_task-szMonitoring', run_id, 'events.tsv'])
-            ),
-            columns=['onset', 'duration', 'eventType', 'lateralization'],
-            separator='\t',
-        )
-        events = events.filter(pl.col('eventType').is_in({'bckg', 'impd'}).not_())
-        if len(events) == 0:
-            return df_dict
-
-        # convert event timestamps
-        events = events.with_columns(end=pl.col('onset') + pl.col('duration')) \
-            .with_columns(pl.col('onset', 'end') * 1000)
-
-        # add label to the data DFs
-        for event in events.iter_rows(named=True):
-            label = self.label2index[event['eventType']]
-            lat = self.lateral2index[event['lateralization']]
-            condition = pl.when(pl.col('timestamp(ms)').is_between(event['onset'], event['end'], closed='left'))
-            label_expr = condition.then(pl.lit(label)).otherwise(pl.col('label')).alias('label')
-            lateral_expr = condition.then(pl.lit(lat)).otherwise(pl.col('lateralization')).alias('lateralization')
-
-            for modal, df in df_dict.items():
-                df_dict[modal] = df.with_columns(label_expr, lateral_expr)
-
-        return df_dict
-
-    def run(self):
-        written_files = 0
-        skipped_sessions = 0
-        skipped_files = 0
-
-        # for each session
-        from tqdm import tqdm
-        for eeg_file in tqdm(sorted(glob(os.sep.join([self.raw_folder, 'sub*', 'ses-01', 'eeg', '*.edf'])))):
-            subject_id, run_id = self.get_info_from_file_path(eeg_file)
-            session_id = f'{subject_id}_{run_id}'
-
-            # check if already run before
-            subject_id_int = int(subject_id.removeprefix('sub-'))
-            if os.path.isfile(self.get_output_file_path(SeizeIT2Const.MODAL_INERTIA, subject_id_int, session_id)) and \
-                    os.path.isfile(self.get_output_file_path(SeizeIT2Const.MODAL_ELECTRO, subject_id_int, session_id)):
-                logger.info(f'Skipping session {session_id} because it has been done before.')
-                skipped_sessions += 1
-                continue
-            logger.info(f'Starting session {session_id}')
-
-            # read file
-            df_dict = self.read_edf_session(subject_id, run_id)
-
-            # add label column
-            df_dict = self.add_label_col(df_dict, subject_id, run_id)
-
-            # write DF file
-            for modal, df in df_dict.items():
-                written = self.write_output_parquet(
-                    df, modal, subject_id_int, session_id,
-                    nan_cols=['lateralization'],
-                    check_interval=(modal == SeizeIT2Const.MODAL_INERTIA)
-                )
-                written_files += int(written)
-                skipped_files += int(not written)
-
-        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
-                    f'{skipped_files} file(s) not written.')
-
-        # convert labels from text to numbers
-        self.export_label_list()
-
-
-class SeizeIT2NpyWindow(NpyWindowFormatter):
-    pass
-
-
-class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
-    """
-    This class saves processed data as numpy arrays of windows.
-    """
-
-    def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict = None,
-                 read_modals=('eeg', 'ecg', 'emg', 'mov'),
-
-                 window_size_sec=2, step_size_sec=2,
-                 min_step_size_sec=0.5, max_short_window=float('inf'), exclude_labels=tuple(),
-                 no_transition=False):
-        SeizeIT2Parquet.__init__(self, raw_folder, destination_folder, sampling_rates, read_modals)
-        NpyWindowFormatter.__init__(self, None, window_size_sec, step_size_sec,
-                                    min_step_size_sec, max_short_window, exclude_labels, no_transition,
-                                    modal_cols=SeizeIT2Const.SUBMODAL_COL)
-
-        self.OUTPUT_PATTERN = '{root}/{modal}/subject_{subject}/{session}_{columns}_{num_window}.npy'
-        self.label_dict = {0: 'null', 1: 'seizure'}
-
-        self.submodal_shape = {}
-        for modal, col_map in SeizeIT2Const.SUBMODAL_COL.items():
-            for submodal, cols in col_map.items():
-                self.submodal_shape[submodal] = [int(window_size_sec * self.sampling_rates[modal] * 1000), len(cols)]
-
     @staticmethod
     def format_annotation_df(event_df: pl.DataFrame, total_duration, start_col='onset', end_col='end') -> pl.DataFrame:
         """
@@ -444,6 +330,115 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
 
         return results
 
+    def run(self):
+        written_files = 0
+        skipped_sessions = 0
+        skipped_files = 0
+
+        # for each session
+        for eeg_file in tqdm(sorted(glob(os.sep.join([self.raw_folder, 'sub*', 'ses-01', 'eeg', '*.edf'])))):
+            subject_id, run_id = self.get_info_from_file_path(eeg_file)
+            session_id = f'{run_id}_split-{{split}}_freq-{{freq}}_event-{{event}}'
+
+            # check if already run before
+            subject_id_int = int(subject_id.removeprefix('sub-'))
+            if bool(glob(self.get_output_file_path(
+                    SeizeIT2Const.MODAL_INERTIA, subject_id_int,
+                    session_id.format(split='*', freq='*', event='*')
+            ))) and bool(glob(self.get_output_file_path(
+                    SeizeIT2Const.MODAL_ELECTRO, subject_id_int,
+                    session_id.format(split='*', freq='*', event='*')
+            ))):
+                logger.info(f'Skipping session {subject_id}_{run_id} because it has been done before.')
+                skipped_sessions += 1
+                continue
+            logger.info(f'Starting session {subject_id}_{run_id}')
+
+            # read file
+            data = self.read_edf_session(subject_id, run_id)
+
+            # split session into segments of the same events (same labels),
+            # so different step size can be run for each label in sliding window
+            data = self.split_by_label(data, subject_id, run_id)
+
+            # write DF file
+            for i, data_split in enumerate(data):
+                label = data_split.pop('label')
+                for modal, df in data_split.items():
+                    df = df.select(pl.exclude('timestamp(ms)'))
+                    written = self.write_output_parquet(
+                        df, modal, subject_id_int,
+                        session_id.format(split=i, freq=int(self.sampling_rates[modal] * 1000), event=int(label)),
+                        check_interval=(modal == SeizeIT2Const.MODAL_INERTIA),
+                        check_label_ts=False
+                    )
+                    written_files += int(written)
+                    skipped_files += int(not written)
+
+        logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
+                    f'{skipped_files} file(s) not written.')
+
+        # convert labels from text to numbers
+        self.export_label_list()
+
+
+class SeizeIT2NpyWindow(NpyWindowFormatter):
+    def run(self) -> pd.DataFrame:
+        """
+        Main processing method
+
+        Returns:
+            a DF, each row is a session, columns are:
+                - 'subject': subject ID
+                - '<modality 1>': array shape [num window, window length, features]
+                - '<modality 2>': ...
+                - 'label': array shape [num window]
+        """
+        # to override:
+        # step 1: call self.get_parquet_file_list() to get data parquet file paths of all sessions
+        # for each session:
+        # step 2: call self.get_parquet_session_info() to get session info if needed
+        # step 3: call self.parquet_to_windows() to run sliding window on each session
+
+        # get list of parquet files
+        parquet_sessions = self.get_parquet_file_list()
+
+        result = []
+        # for each session
+        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True), total=len(parquet_sessions)):
+            # get session info
+            _, subject, _ = self.get_parquet_session_info(list(parquet_session.values())[0])
+
+            session_result = self.parquet_to_windows(parquet_session=parquet_session, subject=subject)
+            result.append(session_result)
+        result = pd.DataFrame(result)
+        return result
+
+
+class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
+    """
+    This class saves processed data as numpy arrays of windows.
+    """
+
+    def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict = None,
+                 read_modals=('eeg', 'ecg', 'emg', 'mov'),
+
+                 window_size_sec=2, step_size_sec=2,
+                 min_step_size_sec=0.5, max_short_window=float('inf'), exclude_labels=tuple(),
+                 no_transition=False):
+        SeizeIT2Parquet.__init__(self, raw_folder, destination_folder, sampling_rates, read_modals)
+        NpyWindowFormatter.__init__(self, None, window_size_sec, step_size_sec,
+                                    min_step_size_sec, max_short_window, exclude_labels, no_transition,
+                                    modal_cols=SeizeIT2Const.SUBMODAL_COL)
+
+        self.OUTPUT_PATTERN = '{root}/{modal}/subject_{subject}/{session}_{columns}_{num_window}.npy'
+        self.label_dict = {0: 'null', 1: 'seizure'}
+
+        self.submodal_shape = {}
+        for modal, col_map in SeizeIT2Const.SUBMODAL_COL.items():
+            for submodal, cols in col_map.items():
+                self.submodal_shape[submodal] = [int(window_size_sec * self.sampling_rates[modal] * 1000), len(cols)]
+
     def write_output_npz(self, arr_dict: dict[str, np.ndarray], modal, subject_id, session_id) -> bool:
         """
         Export data to NPZ file.
@@ -497,51 +492,49 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
             data = self.split_by_label(data, subject_id, run_id)
 
             # sliding window
-            session_data = defaultdict(list)
+            session_data = {True: defaultdict(list), False: defaultdict(list)}
             for continuous_seg in data:
                 seg = self.parquet_to_windows(
                     parquet_session=continuous_seg,
-                    subject=subject_id_int
+                    subject=subject_id_int,
+                    step_size_sec=self.min_step_size_sec if continuous_seg['label'] else None
                 )
-                for key, arr in seg.items():
-                    session_data[key].append(arr)
-                    if key != 'subject':
-                        num_window = len(arr)
-                session_data['label'].append([continuous_seg['label']] * num_window)
+                # append result to subject data
+                for submodal, arr in seg.items():
+                    if submodal not in {'subject', 'label'}:
+                        session_data[continuous_seg['label']][submodal].append(seg[submodal])
+                        num_windows = len(arr)
+
+                # fill missing modals with NaN
+                no_fill = set(seg.keys()) | {'subject', 'label'}
+                for submodal, submodal_shape in self.submodal_shape.items():
+                    if submodal not in no_fill:
+                        session_data[continuous_seg['label']][submodal].append(np.full(
+                            shape=[num_windows, *submodal_shape],
+                            fill_value=np.nan,
+                            dtype=np.float32
+                        ))
             del data, seg, arr, continuous_seg
 
-            # concat window segments
-            for key in list(session_data.keys()):
-                if key == 'subject':
-                    session_data.pop(key)
+            # save each class in a file
+            for label in session_data.keys():
+                if len(session_data[label]) == 0:
                     continue
-                if key == 'label':
-                    session_data[key] = np.concatenate(session_data[key]).astype(bool)
-                else:
-                    session_data[key] = np.concatenate(session_data[key], dtype=np.float32)
 
-            # fill missing submodals with NaN
-            for submodal, submodal_shape in self.submodal_shape.items():
-                if submodal not in session_data.keys():
-                    logger.info(f'Filling {submodal} with shape {submodal_shape}.')
-                    session_data[submodal] = np.full(
-                        shape=[len(session_data['label']), *submodal_shape],
-                        fill_value=np.nan,
-                        dtype=np.float32
-                    )
+                # concat window segments of this subject
+                for submodal in list(session_data[label].keys()):
+                    session_data[label][submodal] = np.concatenate(session_data[label][submodal], dtype=np.float32)
+                    num_windows = len(session_data[label][submodal])
+                    if num_windows == 0:
+                        break
 
-            # write event and non-event in separate files
-            for label in [True, False]:
-                mask = session_data['label'] == label
-                n_window = np.sum(mask)
-                if n_window > 0:
+                # write file
+                if num_windows > 0:
                     # write NPZ file
                     written = self.write_output_npz(
-                        {k: v[mask]
-                         for k, v in session_data.items()
-                         if k != 'label'},
+                        session_data[label],
                         modal='all_modal', subject_id=subject_id_int,
-                        session_id=session_id.format(n_window=n_window, is_event=int(label)),
+                        session_id=session_id.format(n_window=num_windows, is_event=int(label)),
                     )
                     written_files += int(written)
                     skipped_files += int(not written)
@@ -554,10 +547,8 @@ class SeizeIT2NpzFile(SeizeIT2Parquet, NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    SeizeIT2NpzFile(
+    SeizeIT2Parquet(
         raw_folder='/mnt/data_partition/downloads/ds005873-download',
-        destination_folder='/mnt/data_partition/downloads/npz_dataset/seizeit2',
-        read_modals=['eeg', 'ecg', 'emg', 'mov'],
-        window_size_sec=5, step_size_sec=2,
-        min_step_size_sec=0.5, max_short_window=float('inf'),
+        destination_folder='/mnt/data_partition/downloads/parquet_dataset/seizeit2',
+        read_modals=['eeg', 'ecg', 'emg', 'mov']
     ).run()
