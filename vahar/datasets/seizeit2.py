@@ -29,9 +29,9 @@ class SeizeIT2Const:
             'emg': ['emg']
         },
         'inertia': {
-            'headAcc': ['headAccX', 'headAccY'],
+            'headAcc': ['headAccX', 'headAccY', 'headAccZ'],
             'headGyr': ['headGyrX', 'headGyrY', 'headGyrZ'],
-            'torsoAcc': ['torsoAccX', 'torsoAccY'],
+            'torsoAcc': ['torsoAccX', 'torsoAccY', 'torsoAccZ'],
             'torsoGyr': ['torsoGyrX', 'torsoGyrY', 'torsoGyrZ']
         }
     }
