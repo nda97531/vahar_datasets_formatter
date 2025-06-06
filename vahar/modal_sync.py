@@ -3,11 +3,11 @@ import numpy as np
 from loguru import logger
 
 from my_py_utils.my_py_utils.number_array import interval_intersection
-from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df as pl_resample_numeric_df
+from my_py_utils.my_py_utils.pl_dataframe import resample_numeric_df
 
 
 def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: float,
-                          sampling_rates: dict, ts_col: str = 'timestamp(ms)',
+                          sampling_rates: dict = None, ts_col: str = 'timestamp(ms)',
                           raise_neg_interval: bool = True) -> list:
     """
     Split an interrupted session into multiple uninterrupted sub-sessions with even timestamps (interpolated)
@@ -20,9 +20,8 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
             - key: modal name
             - value: max interval between rows of an uninterrupted DF, unit: millisecond
         min_length_segment: drop sessions shorter than this threshold, unit: millisecond
-        sampling_rates: dict:
-            - key: modal name
-            - value: sampling rate to interpolate, unit: sample/millisecond
+        sampling_rates: dict[modal name] = sampling rate to interpolate, unit: sample/millisecond;
+            won't run interpolation if not provided.
         ts_col: timestamp column name, unit: millisecond
         raise_neg_interval: whether to raise an error if encountering negative intervals
 
@@ -72,8 +71,9 @@ def split_interrupted_dfs(dfs: dict, max_interval: dict, min_length_segment: flo
                                                      combined_ts_segment[1].item()))
 
             # interpolate to resample
-            df = pl_resample_numeric_df(df, ts_col, sampling_rates[modal],
-                                        start_ts=combined_ts_segment[0], end_ts=combined_ts_segment[1])
+            if sampling_rates is not None:
+                df = resample_numeric_df(df, ts_col, sampling_rates[modal],
+                                            start_ts=combined_ts_segment[0], end_ts=combined_ts_segment[1])
 
             segment_dfs[modal] = df
 

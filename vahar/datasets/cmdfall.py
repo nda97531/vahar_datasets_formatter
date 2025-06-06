@@ -1,6 +1,7 @@
 import os
 import re
 from collections import defaultdict
+from copy import deepcopy
 from glob import glob
 from typing import List, Dict
 import numpy as np
@@ -14,11 +15,65 @@ from my_py_utils.my_py_utils.string_utils import rreplace
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from vahar.constant import G_TO_MS2
-    from vahar.modal_sync import split_interrupted_dfs
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..constant import G_TO_MS2
-    from ..modal_sync import split_interrupted_dfs
+
+
+def merge_annotation(anno_dfs: list[pl.DataFrame], start_col='start', end_col='end', label_col='label') -> pl.DataFrame:
+    """
+    Merge multiple camera annotation dataframes into a single dataframe.
+
+    Args:
+        anno_dfs: list of polars DataFrames. Each DataFrame has columns [label_col, start_col, end_col].
+        start_col: start timestamp column name
+        end_col: end timestamp column name
+        label_col: label column name
+
+    Returns:
+        A merged DataFrame with columns [start_col, end_col, label_col].
+    """
+    if len(anno_dfs) == 1:
+        return anno_dfs[0].select(start_col, end_col, label_col)
+
+    # get all unique time boundaries
+    boundaries = set()
+    for df in anno_dfs:
+        boundaries.update(df.get_column(start_col))
+        boundaries.update(df.get_column(end_col))
+    time_points = sorted(boundaries)
+
+    # generate non-overlapping intervals
+    merged_rows = []
+    for i in range(len(time_points) - 1):
+        interval_start = time_points[i]
+        interval_end = time_points[i + 1]
+        interval_labels = []
+
+        for cam_idx, df in enumerate(anno_dfs):
+            # check if this interval overlaps with any annotation in this DF
+            overlapping = df.filter((pl.col(start_col) <= interval_start) & (interval_end <= pl.col(end_col)))
+            if len(overlapping) > 0:
+                interval_labels.append(overlapping.item(0, label_col))
+
+        # apply label merging logic
+        if len(interval_labels) == 0:
+            merged_label = None
+        elif len(set(interval_labels)) == 1:
+            merged_label = interval_labels[0]
+        else:
+            print(
+                f"Warning: conflicting labels {interval_labels} between {interval_start} and {interval_end}. Marked as inactivity.")
+            merged_label = None
+
+        if merged_label is not None:
+            if (len(merged_rows) > 0) and (merged_label == merged_rows[-1][label_col]) and (
+                    interval_start == merged_rows[-1][end_col]):
+                merged_rows[-1][end_col] = interval_end
+            else:
+                merged_rows.append({start_col: interval_start, end_col: interval_end, label_col: merged_label})
+
+    return pl.DataFrame(merged_rows)
 
 
 class CMDFallConst:
@@ -61,8 +116,14 @@ class CMDFallConst:
         # floor equation, mean of all non-zero equations in raw data
         # key: kinect ID, value: equation coefficients [a, b, c, d]
         floor_eqs = {
-            3: np.array([0.0277538, 0.9024955, -0.42962335, 1.630657])[[0, 2, 1, 3]]
+            1: [0.08206175, 0.93994347, -0.33037784, 1.70011137],
+            2: [0.01397648, 0.91808462, -0.39580822, 1.67926973],
+            3: [0.0262718, 0.90158846, -0.43152657, 1.63472081],
+            4: [-0.01118109, 0.92673825, -0.37469574, 1.71229848],
+            5: [-0.04063133, 0.97007644, -0.23862125, 1.80490598]
         }
+        floor_eqs = {kinect_id: np.array(eq)[[0, 2, 1, 3]]
+                     for kinect_id, eq in floor_eqs.items()}
         cls.SKELETON_ROT_MAT = {}
         for kinect_id, floor_eq in floor_eqs.items():
             norm2 = np.linalg.norm(floor_eq[:3])
@@ -76,38 +137,34 @@ CMDFallConst.define_att()
 
 class CMDFallParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
-                 min_length_segment: float = 10,
-                 use_accelerometer: list = (1, 155)):
+                 min_length_segment: float = 10):
         """
         Class for processing CMDFall dataset.
         Use only Inertial sensors and Camera 3.
         Labels:
-        - 0: unknown label
+        - 0: unknown activity
         - from 1 to 20: as in the raw dataset
 
         Args:
             min_length_segment: only write segments longer than this threshold (unit: sec)
             use_accelerometer: inertial sensor IDs
         """
-        assert len(use_accelerometer), 'No accelerometer is used?'
-        assert len(set(use_accelerometer) - {1, 155}) == 0, 'Invalid inertial sensor ID. Allowed: [1, 155]'
         super().__init__(raw_folder, destination_folder, sampling_rates)
 
         self.min_length_segment = min_length_segment * 1000
-        self.use_accelerometer = use_accelerometer
-        self.use_kinect = [3]
+        self.use_accelerometer = (1, 155)
+        self.use_kinect = (1, 2, 3, 4, 5, 6, 7)
 
-        # if actual interval > expected interval * this coef; it's considered an interruption and DF will be split
-        max_interval_coef = 4
+        # if actual interval > expected interval * this coeff; it's considered an interruption and DF will be split
+        max_interval_coeff = 4
         # maximum intervals in millisecond
         self.max_interval = {
-            CMDFallConst.MODAL_INERTIA: 1000 / CMDFallConst.RAW_INERTIA_FREQ * max_interval_coef,
-            CMDFallConst.MODAL_SKELETON: 1000 / CMDFallConst.RAW_KINECT_FPS * max_interval_coef
+            CMDFallConst.MODAL_INERTIA: 1000 / CMDFallConst.RAW_INERTIA_FREQ * max_interval_coeff,
+            CMDFallConst.MODAL_SKELETON: 1000 / CMDFallConst.RAW_KINECT_FPS * max_interval_coeff
         }
 
         # read annotation file
-        anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
-        self.anno_df = anno_df.filter(pl.col('kinect_id') == self.use_kinect[0])
+        self.anno_df = pl.read_csv(f'{raw_folder}/annotation.csv')
 
     def scan_data_files(self) -> pd.DataFrame:
         """
@@ -198,7 +255,8 @@ class CMDFallParquet(ParquetDatasetFormatter):
 
         # straighten skeleton (rotate so that it stands up right)
         skeletons = skeletons.transpose([0, 2, 1])
-        skeletons = np.matmul(CMDFallConst.SKELETON_ROT_MAT[kinect_id], skeletons)
+        if kinect_id in CMDFallConst.SKELETON_ROT_MAT:
+            skeletons = np.matmul(CMDFallConst.SKELETON_ROT_MAT[kinect_id], skeletons)
         skeletons = skeletons.transpose([0, 2, 1])
 
         # move skeleton to coordinate origin
@@ -250,24 +308,34 @@ class CMDFallParquet(ParquetDatasetFormatter):
         df = pl.concat([info_df, data_df], how='horizontal')
         return df
 
-    def split_session_to_segments(self, data_dfs: dict) -> list:
+    def resample_session_dfs(self, data_dfs: dict) -> dict[str, pl.DataFrame]:
         """
-        Split dataframes of a session into uninterrupted segments
+        Resample session dataframes of all views so they match in duration and timestamps.
 
         Args:
             data_dfs: a dict with keys are sensor (format: '{sensor type}_{sensor id}'), values are data DFs
 
         Returns:
-            list of uninterrupted segments; each one is a dict with keys are modal names, values are DFs
+            same format as input, but all DFs have
+                - the same start timestamp and duration
+                - resampled to the desired sampling rate
+                - fill NULL at missing datapoints
         """
-        # split interrupted signals into uninterrupted sub-sessions
+        data_dfs = {view: df.sort(by='timestamp(ms)') for view, df in data_dfs.items()}
+
         max_interval = {key: self.max_interval[key.split('_')[0]] for key in data_dfs.keys()}
-        sampling_rates = {key: self.sampling_rates[key.split('_')[0]] for key in data_dfs.keys()}
-        segments = split_interrupted_dfs(
-            data_dfs, max_interval=max_interval, min_length_segment=self.min_length_segment,
-            sampling_rates=sampling_rates, raise_neg_interval=False
-        )
-        return segments
+        target_intervals = {key: int(1 / self.sampling_rates[key.split('_')[0]]) for key in data_dfs.keys()}
+
+        session_start_ts = min(df.item(0, 'timestamp(ms)') for df in data_dfs.values())
+        session_end_ts = max(df.item(-1, 'timestamp(ms)') for df in data_dfs.values()) + 1
+
+        result_dfs = {
+            view: pl.DataFrame({'timestamp(ms)': np.arange(session_start_ts, session_end_ts, target_intervals[view])})
+            .set_sorted('timestamp(ms)')
+            .join_asof(data_dfs[view], on='timestamp(ms)', strategy='nearest', tolerance=max_interval[view])
+            for view in data_dfs
+        }
+        return result_dfs
 
     @staticmethod
     def concat_sensors_to_modal(data_dict: dict) -> dict:
@@ -358,13 +426,15 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 else self.read_skeleton_df_file(data_file)
                 for sensor, data_file in session_row.items()
             }
-            # split session into uninterrupted segments
-            data_segments = self.split_session_to_segments(data_dfs)
-            # concat sensors into modals
-            data_segments = [self.concat_sensors_to_modal(seg) for seg in data_segments]
+
+            # standardise timestamps of all DFs
+            data_dfs = self.resample_session_dfs(data_dfs)
 
             # get annotation DF
             session_anno_df = self.anno_df.filter(pl.col('setup_id') == session_id)
+
+            # concat sensors into modals
+            data_dfs = self.concat_sensors_to_modal(data_dfs)
 
             # add label column and save each segment
             for i, segment in enumerate(data_segments):
@@ -391,7 +461,7 @@ class CMDFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/UCD/dataset_processed/CMDFall_4s'
+    parquet_dir = '/mnt/data_partition/downloads/parquet_dataset/cmdfallfull'
     inertial_freq = 50
     skeletal_freq = 20
 
