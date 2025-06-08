@@ -58,7 +58,7 @@ class ParquetDatasetFormatter:
         return p
 
     def write_output_parquet(self, data: pl.DataFrame, modal: str, subject: any, session: any,
-                             nan_cols=tuple(), check_interval=True, check_label_ts=True) -> bool:
+                             allow_nan_cols: Union[tuple, str] = (), check_interval=True, check_label_ts=True) -> bool:
         """
         Write a processed DataFrame of 1 modality, 1 session
 
@@ -67,7 +67,8 @@ class ParquetDatasetFormatter:
             modal: modality name (e.g. accelerometer, skeleton)
             subject: subject name/ID
             session: session ID
-            nan_cols: columns that are allowed to have NaNs or None
+            allow_nan_cols: columns that are allowed to have NaNs or None;
+                if `nan_cols='all'`, don't check for NaN in dataframe
             check_interval: whether to check interval between samples
             check_label_ts: whether to check if 'label' and 'timestamp(ms)' are columns in the DF
 
@@ -88,7 +89,7 @@ class ParquetDatasetFormatter:
         output_path = self.get_output_file_path(modal=modal, subject=subject, session=session)
 
         # check if there's any NAN
-        if np.isnan(data.drop(nan_cols).to_numpy()).sum():
+        if (allow_nan_cols != 'all') and np.isnan(data.drop(allow_nan_cols).to_numpy()).sum():
             raise ValueError(f'NAN in data: {output_path}')
 
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)

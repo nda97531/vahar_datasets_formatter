@@ -1,16 +1,17 @@
 import os
 import re
 from collections import defaultdict
-from copy import deepcopy
 from glob import glob
-from typing import List, Dict
+from typing import List, Dict, Union
 import numpy as np
 import pandas as pd
 import polars as pl
 from loguru import logger
 from transforms3d.axangles import axangle2mat
+from scipy.interpolate import interp1d
 
 from my_py_utils.my_py_utils.string_utils import rreplace
+from my_py_utils.my_py_utils.number_array import np_mode
 
 if __name__ == '__main__':
     from vahar.datasets.base_classes import ParquetDatasetFormatter, NpyWindowFormatter
@@ -18,62 +19,6 @@ if __name__ == '__main__':
 else:
     from .base_classes import ParquetDatasetFormatter, NpyWindowFormatter
     from ..constant import G_TO_MS2
-
-
-def merge_annotation(anno_dfs: list[pl.DataFrame], start_col='start', end_col='end', label_col='label') -> pl.DataFrame:
-    """
-    Merge multiple camera annotation dataframes into a single dataframe.
-
-    Args:
-        anno_dfs: list of polars DataFrames. Each DataFrame has columns [label_col, start_col, end_col].
-        start_col: start timestamp column name
-        end_col: end timestamp column name
-        label_col: label column name
-
-    Returns:
-        A merged DataFrame with columns [start_col, end_col, label_col].
-    """
-    if len(anno_dfs) == 1:
-        return anno_dfs[0].select(start_col, end_col, label_col)
-
-    # get all unique time boundaries
-    boundaries = set()
-    for df in anno_dfs:
-        boundaries.update(df.get_column(start_col))
-        boundaries.update(df.get_column(end_col))
-    time_points = sorted(boundaries)
-
-    # generate non-overlapping intervals
-    merged_rows = []
-    for i in range(len(time_points) - 1):
-        interval_start = time_points[i]
-        interval_end = time_points[i + 1]
-        interval_labels = []
-
-        for cam_idx, df in enumerate(anno_dfs):
-            # check if this interval overlaps with any annotation in this DF
-            overlapping = df.filter((pl.col(start_col) <= interval_start) & (interval_end <= pl.col(end_col)))
-            if len(overlapping) > 0:
-                interval_labels.append(overlapping.item(0, label_col))
-
-        # apply label merging logic
-        if len(interval_labels) == 0:
-            merged_label = None
-        elif len(set(interval_labels)) == 1:
-            merged_label = interval_labels[0]
-        else:
-            print(
-                f"Warning: conflicting labels {interval_labels} between {interval_start} and {interval_end}. Marked as inactivity.")
-            merged_label = None
-
-        if merged_label is not None:
-            if (len(merged_rows) > 0) and (merged_label == merged_rows[-1][label_col]) and (
-                    interval_start == merged_rows[-1][end_col]):
-                merged_rows[-1][end_col] = interval_end
-            else:
-                merged_rows.append({start_col: interval_start, end_col: interval_end, label_col: merged_label})
-
-    return pl.DataFrame(merged_rows)
 
 
 class CMDFallConst:
@@ -135,9 +80,140 @@ class CMDFallConst:
 CMDFallConst.define_att()
 
 
+def plot_timelines(df_dict: dict[str, pl.DataFrame], start_col='start', end_col='end', label_col='label'):
+    """
+    Plot labels in annotation dataframes as parallel timelines
+
+    Args:
+        df_dict: dict of annotation dataframes
+        start_col: column name for event start time
+        end_col: column name for event end time
+        label_col: event label
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    all_labels = sorted(set(label for df in df_dict.values() for label in df[label_col]))
+    num_labels = len(all_labels)
+
+    if num_labels <= 20:
+        palette = sns.color_palette("tab20", num_labels)
+    else:
+        palette = sns.color_palette("husl", num_labels)  # fallback for >20
+
+    label_to_color = {label: palette[i] for i, label in enumerate(all_labels)}
+
+    fig, ax = plt.subplots(figsize=(10, len(df_dict) * 1.5))
+
+    yticks = []
+    yticklabels = []
+
+    for i, (df_name, df) in enumerate(df_dict.items()):
+        y = i
+        yticks.append(y)
+        yticklabels.append(df_name)
+
+        for row in df.iter_rows(named=True):
+            color = label_to_color[row[label_col]]
+            ax.barh(
+                y=y,
+                width=row[end_col] - row[start_col],
+                left=row[start_col],
+                height=0.4,
+                color=color,
+                edgecolor='black'
+            )
+            ax.text(row[start_col], y + 0.05, row[label_col], va='bottom', ha='left', fontsize=9)
+
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticklabels)
+    ax.set_xlabel("Time")
+    ax.set_title("Parallel Timelines with Consistent Label Colors")
+    ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+
+    # Optional: create a legend
+    handles = [plt.Line2D([0], [0], color=color, lw=6) for color in label_to_color.values()]
+    ax.legend(handles, label_to_color.keys(), title="Labels", bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def merge_annotation(anno_dfs: dict[str, pl.DataFrame], start_col='start', end_col='end',
+                     label_col='label') -> pl.DataFrame:
+    """
+    Merge multiple annotation dataframes into a single dataframe.
+
+    Args:
+        anno_dfs: dict[view name] = polars DF. Each DataFrame has columns [label_col, start_col, end_col].
+        start_col: start timestamp column name
+        end_col: end timestamp column name
+        label_col: label column name
+
+    Returns:
+        A merged DataFrame with columns [start_col, end_col, label_col].
+    """
+    if len(anno_dfs) == 1:
+        return list(anno_dfs.values())[0].select(start_col, end_col, label_col)
+
+    # get all unique time boundaries
+    boundaries = set()
+    for df in anno_dfs.values():
+        boundaries.update(df.get_column(start_col))
+        boundaries.update(df.get_column(end_col))
+    time_points = sorted(boundaries)
+
+    merged_rows = []
+    previous_warm_msgs = set()
+    # for each non-overlapping segments
+    for i in range(len(time_points) - 1):
+        segment_start = time_points[i]
+        segment_end = time_points[i + 1]
+        segment_labels = []
+
+        for view, df in anno_dfs.items():
+            # check if this segment fits in any event in this annotation DF
+            overlapping = df.filter((pl.col(start_col) <= segment_start) & (segment_end <= pl.col(end_col)))
+            seg_lbl = list(set(overlapping.get_column(label_col)))
+            if len(seg_lbl) > 1:
+                warn_msg = (f'Conflicting labels in the same annotation DF number {view} '
+                            f'from frame {overlapping.item(0, "start_frame")} '
+                            f'to {overlapping.item(-1, "stop_frame")}: {seg_lbl}')
+                if warn_msg not in previous_warm_msgs:
+                    logger.warning(warn_msg)
+                    previous_warm_msgs.add(warn_msg)
+
+            if len(seg_lbl) > 0:
+                segment_labels += seg_lbl  # label of the segment
+
+        # apply label merging logic
+        if (len(anno_dfs) > 2) and (len(segment_labels) < 2):  # only accept a label if at least 2 views agree
+            merged_label = 0
+        elif len(set(segment_labels)) == 1:
+            merged_label = segment_labels[0]
+        else:
+            # vote a label
+            merged_label = np_mode(np.array(segment_labels), take_1_value=False)
+            if merged_label.shape:  # if there's a tie, assign as unknown label
+                merged_label = 0
+
+        if merged_label > 0:  # if not unknown label
+            if (len(merged_rows) > 0) \
+                    and (merged_label == merged_rows[-1][label_col]) \
+                    and (segment_start == merged_rows[-1][end_col]):
+                # merge with previous segment if 2 have the same label and there's no gap between 2 segments
+                merged_rows[-1][end_col] = segment_end
+            else:
+                merged_rows.append({start_col: segment_start, end_col: segment_end, label_col: merged_label})
+
+    merged_rows = pl.DataFrame(merged_rows)
+    # plot_timelines(anno_dfs | {'vote': merged_rows}, start_col, end_col, label_col)
+    return merged_rows
+
+
 class CMDFallParquet(ParquetDatasetFormatter):
     def __init__(self, raw_folder: str, destination_folder: str, sampling_rates: dict,
-                 min_length_segment: float = 10):
+                 max_interval_coeff=4):
         """
         Class for processing CMDFall dataset.
         Use only Inertial sensors and Camera 3.
@@ -146,17 +222,19 @@ class CMDFallParquet(ParquetDatasetFormatter):
         - from 1 to 20: as in the raw dataset
 
         Args:
-            min_length_segment: only write segments longer than this threshold (unit: sec)
-            use_accelerometer: inertial sensor IDs
+            raw_folder: path to unprocessed dataset
+            destination_folder: folder to save output
+            sampling_rates: a dict containing sampling rates of each modal to resample by linear interpolation.
+                - key: modal name
+                - value: sampling rate (unit: Hz)
+            max_interval_coeff: if actual interval > expected interval * this coeff,
+                it will be considered missing datapoints and will be filled with NULL
         """
         super().__init__(raw_folder, destination_folder, sampling_rates)
-
-        self.min_length_segment = min_length_segment * 1000
         self.use_accelerometer = (1, 155)
         self.use_kinect = (1, 2, 3, 4, 5, 6, 7)
 
         # if actual interval > expected interval * this coeff; it's considered an interruption and DF will be split
-        max_interval_coeff = 4
         # maximum intervals in millisecond
         self.max_interval = {
             CMDFallConst.MODAL_INERTIA: 1000 / CMDFallConst.RAW_INERTIA_FREQ * max_interval_coeff,
@@ -228,14 +306,63 @@ class CMDFallParquet(ParquetDatasetFormatter):
         session_id, subject, sensor_id = CMDFallParquet.get_info_from_session_file(path)
         sensor_pos = CMDFallConst.ACCELEROMETER_POSITION[sensor_id]
         df = pl.read_csv(path, columns=['timestamp', 'x', 'y', 'z'])
-
         df = df.with_columns(pl.col(['x', 'y', 'z']) * G_TO_MS2)
-
         df = df.rename({
             'timestamp': 'timestamp(ms)',
             'x': f'{sensor_pos}_acc_x(m/s^2)', 'y': f'{sensor_pos}_acc_y(m/s^2)', 'z': f'{sensor_pos}_acc_z(m/s^2)',
         })
+        df = df.sort(by='timestamp(ms)')
+        return df
 
+    @staticmethod
+    def read_skeleton_df_file(path: str) -> pl.DataFrame:
+        """
+        Read and format skeleton file (normalise, change column names)
+
+        Args:
+            path: path to file
+
+        Returns:
+            a polars dataframe
+        """
+        session_id, subject, sensor_id = CMDFallParquet.get_info_from_session_file(path)
+
+        # raw columns: timestamp,frame_index,person_index,skeleton_data[20jointsx5(X,Y,Z,Xrgb,Yrgb)],floor_equation
+        df = pl.read_csv(path, skip_rows=1, has_header=False)
+        data_df = df.get_column('column_4')
+        info_df = df.select(pl.col('column_1').alias('timestamp(ms)'), pl.col('column_2').alias('frame_index'))
+        del df
+
+        # shape [frame, joint * axis]
+        data_df = [s.strip().split(' ') for s in data_df]
+
+        # remove invalid frames (a valid frame has 100 features (20 joints * (3 3D skeleton + 2 2D skeleton))
+        keep_idx = [row
+                    for row, frame_ske in enumerate(data_df)
+                    if len(frame_ske) == 100]
+        if len(keep_idx) != len(data_df):
+            data_df = [data_df[i] for i in keep_idx]
+        data_df = np.array(data_df, dtype=float)
+
+        data_df = data_df.reshape([len(data_df), len(CMDFallConst.JOINTS_LIST), 5])  # shape [frame, joint, axis]
+        # remove 2 RGB columns, keep 3D columns
+        data_df = data_df[:, :, :3]
+        # switch Y and Z
+        data_df = data_df[:, :, [0, 2, 1]]
+        # normalise skeleton
+        data_df = CMDFallParquet.normalise_skeletons(data_df, sensor_id)
+
+        # shape [frame, joint * axis]
+        data_df = data_df.reshape([len(data_df), len(CMDFallConst.SELECTED_JOINT_LIST) * 3])
+        data_df = pl.DataFrame(data_df,
+                               schema=[c.format(kinect_id=sensor_id) for c in CMDFallConst.SELECTED_SKELETON_COLS])
+
+        if len(keep_idx) != len(info_df):
+            info_df = info_df[keep_idx]
+        df = pl.concat([info_df, data_df], how='horizontal')
+
+        assert df.get_column('timestamp(ms)').is_sorted()
+        assert df.get_column('frame_index').is_sorted()
         return df
 
     @staticmethod
@@ -268,45 +395,48 @@ class CMDFallParquet(ParquetDatasetFormatter):
 
         return skeletons
 
-    @staticmethod
-    def read_skeleton_df_file(path: str) -> pl.DataFrame:
+    def get_session_annotation(self, data_dfs: dict, session_id: int):
         """
-        Read and format skeleton file (normalise, change column names)
+        Get the annotation for one session.
 
         Args:
-            path: path to file
+            data_dfs: a dict with keys are kinect sensor (format: 'skeleton_{sensor id}'),
+                values are DFs with columns 'timestamp(ms)' and 'frame_index'
+            session_id: ID of the session
 
         Returns:
-            a polars dataframe
+            an annotation DF for this session, columns are 'label', 'start_ts', 'end_ts'
         """
-        session_id, subject, sensor_id = CMDFallParquet.get_info_from_session_file(path)
+        session_anno_df = self.anno_df.filter(pl.col('setup_id') == session_id)
 
-        # raw columns: timestamp,frame_index,person_index,skeleton_data[20jointsx5(X,Y,Z,Xrgb,Yrgb)],floor_equation
-        df = pl.read_csv(path, skip_rows=1, has_header=False)
-        data_df = df.get_column('column_4')
-        info_df = df.select(pl.col('column_1').alias('timestamp(ms)'), pl.col('column_2').alias('frame_index'))
-        del df
+        view_anno_dfs = {}
+        for kinect_id, cam_anno_df in session_anno_df.group_by('kinect_id'):
+            kinect_id = kinect_id[0]
+            cam_anno_df = cam_anno_df.sort('start_frame')
 
-        # shape [frame, joint * axis]
-        data_df = np.array([s.strip().split(' ') for s in data_df], dtype=float)
-        org_length = len(data_df)
+            # validate annotation DF
+            all_boundaries = cam_anno_df.select('start_frame', 'stop_frame').to_numpy().reshape(-1)
+            try:
+                sorted_mask = all_boundaries[:-1] <= all_boundaries[1:]
+                assert np.all(sorted_mask), (f'annotation DF of session {session_id}, kinect {kinect_id} '
+                                             f'is not sorted at frame {all_boundaries[:-1][~sorted_mask]}')
+            except AssertionError as e:
+                print(e)
 
-        # remove 2 RGB columns, keep 3D columns
-        # shape [frame, joint, axis]
-        data_df = data_df.reshape([org_length, len(CMDFallConst.JOINTS_LIST), 5])
-        data_df = data_df[:, :, :3]
-        # switch Y and Z
-        data_df = data_df[:, :, [0, 2, 1]]
-        # normalise skeleton
-        data_df = CMDFallParquet.normalise_skeletons(data_df, sensor_id)
+            # map from frame index to timestamp
+            frame2ts = data_dfs[f'skeleton_{kinect_id}']
+            frame2ts = interp1d(frame2ts.get_column('frame_index'), frame2ts.get_column('timestamp(ms)'),
+                                fill_value='extrapolate', assume_sorted=True)
 
-        # shape [frame, joint * axis]
-        data_df = data_df.reshape([org_length, len(CMDFallConst.SELECTED_JOINT_LIST) * 3])
-        data_df = pl.DataFrame(data_df,
-                               schema=[c.format(kinect_id=sensor_id) for c in CMDFallConst.SELECTED_SKELETON_COLS])
+            cam_anno_df = cam_anno_df.with_columns(
+                start_ts=pl.col('start_frame').map_elements(frame2ts, return_dtype=pl.Float64).round().cast(pl.Int64),
+                end_ts=pl.col('stop_frame').map_elements(frame2ts, return_dtype=pl.Float64).round().cast(pl.Int64)
+            )
+            view_anno_dfs[kinect_id] = cam_anno_df
 
-        df = pl.concat([info_df, data_df], how='horizontal')
-        return df
+        view_anno_df = merge_annotation(view_anno_dfs, start_col='start_ts', end_col='end_ts', label_col='action_id')
+        view_anno_df = view_anno_df.rename({'action_id': 'label'})
+        return view_anno_df
 
     def resample_session_dfs(self, data_dfs: dict) -> dict[str, pl.DataFrame]:
         """
@@ -321,8 +451,6 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 - resampled to the desired sampling rate
                 - fill NULL at missing datapoints
         """
-        data_dfs = {view: df.sort(by='timestamp(ms)') for view, df in data_dfs.items()}
-
         max_interval = {key: self.max_interval[key.split('_')[0]] for key in data_dfs.keys()}
         target_intervals = {key: int(1 / self.sampling_rates[key.split('_')[0]]) for key in data_dfs.keys()}
 
@@ -364,38 +492,30 @@ class CMDFallParquet(ParquetDatasetFormatter):
         dfs = {sensor: pl.concat(list_dfs, how='horizontal') for sensor, list_dfs in dfs.items()}
         return dfs
 
-    def assign_label(self, ske_df: pl.DataFrame, acc_df: pl.DataFrame, anno_df: pl.DataFrame) -> tuple:
+    @staticmethod
+    def assign_label(data_dfs: dict[str, pl.DataFrame], anno_df: pl.DataFrame) -> dict:
         """
         Add a 'label' column
         Args:
-            ske_df: skeleton DF
-            acc_df: accelerometer DF
+            data_dfs: a dict mapping view name to data DF with a 'timestamp(ms)' column
             anno_df: annotation DF for this session; filtered from self.anno_df
 
         Returns:
-            2 DFs (ske, acc) but with `label` column
+            same format as `data_dfs` but with 'label' column added
         """
-        start_ts_diff = abs(ske_df.item(0, 'timestamp(ms)') - acc_df.item(0, 'timestamp(ms)'))
-        end_ts_diff = abs(ske_df.item(-1, 'timestamp(ms)') - acc_df.item(-1, 'timestamp(ms)'))
-        assert \
-            (start_ts_diff <= self.max_interval[CMDFallConst.MODAL_SKELETON]) and \
-            (end_ts_diff <= self.max_interval[CMDFallConst.MODAL_SKELETON]), \
-            'Accelerometer and skeleton DFs must be synchronised.'
-
         # fill label column with 0 (unknown class)
-        ske_df = ske_df.with_columns(pl.Series(name='label', values=np.zeros(len(ske_df), dtype=int)))
+        data_dfs = {view: df.with_columns(label=0) for view, df in data_dfs.items()}
 
-        # fill labels into column of ske DF
+        # for each event in the annotation DF
         for anno_row in anno_df.iter_rows(named=True):
-            ske_df = ske_df.with_columns(
-                label=pl.when(
-                    pl.col('frame_index').is_between(anno_row['start_frame'], anno_row['stop_frame'])
-                ).then(anno_row['action_id']).otherwise(pl.col('label'))
-            )
-
-        # fill label into acc DF
-        acc_df = acc_df.join_asof(ske_df.select('timestamp(ms)', 'label'), on='timestamp(ms)', strategy='nearest')
-        return ske_df, acc_df
+            # for each modal DF
+            for modal, df in data_dfs.items():
+                data_dfs[modal] = df.with_columns(
+                    label=pl.when(
+                        pl.col('timestamp(ms)').is_between(anno_row['start_ts'], anno_row['end_ts'], closed='left')
+                    ).then(anno_row['label']).otherwise(pl.col('label'))
+                )
+        return data_dfs
 
     def run(self):
         logger.info('Scanning for sessions...')
@@ -425,30 +545,31 @@ class CMDFallParquet(ParquetDatasetFormatter):
                 sensor: self.read_accelerometer_df_file(data_file) if sensor.startswith(CMDFallConst.MODAL_INERTIA)
                 else self.read_skeleton_df_file(data_file)
                 for sensor, data_file in session_row.items()
+                if os.path.isfile(data_file)
             }
+
+            # get annotation DF; use the raw data_dfs to map frame index -> timestamp
+            anno_df = self.get_session_annotation(data_dfs, session_id)
+            # column frame_index is no longer needed
+            for view in list(data_dfs):
+                if 'frame_index' in data_dfs[view]:
+                    data_dfs[view] = data_dfs[view].drop('frame_index')
 
             # standardise timestamps of all DFs
             data_dfs = self.resample_session_dfs(data_dfs)
 
-            # get annotation DF
-            session_anno_df = self.anno_df.filter(pl.col('setup_id') == session_id)
-
-            # concat sensors into modals
+            # concat sensors of the same modality into the same DF (same frequency => same DF size)
             data_dfs = self.concat_sensors_to_modal(data_dfs)
 
-            # add label column and save each segment
-            for i, segment in enumerate(data_segments):
-                segment_info = f'{session_info}_{i}' if i < len(data_segments) - 1 else session_info
-                inertial_df = segment[CMDFallConst.MODAL_INERTIA]
-                skeleton_df = segment[CMDFallConst.MODAL_SKELETON]
+            # add label to the DF
+            data_dfs = self.assign_label(data_dfs, anno_df)
 
-                # add label
-                skeleton_df, inertial_df = self.assign_label(skeleton_df, inertial_df, session_anno_df)
-                # write files
-                written = self.write_output_parquet(inertial_df, CMDFallConst.MODAL_INERTIA, subject, segment_info)
-                written_files += int(written)
-                skipped_files += int(not written)
-                written = self.write_output_parquet(skeleton_df, CMDFallConst.MODAL_SKELETON, subject, segment_info)
+            # save data files
+            for modal_name, modal_df in data_dfs.items():
+                written = self.write_output_parquet(
+                    modal_df, modal_name, subject, session_info,
+                    allow_nan_cols=tuple(c for c in modal_df.columns if c not in {'label', 'timestamp(ms)'}),
+                )
                 written_files += int(written)
                 skipped_files += int(not written)
         logger.info(f'{written_files} file(s) written, {skipped_sessions} session(s) skipped, '
@@ -461,16 +582,15 @@ class CMDFallNpyWindow(NpyWindowFormatter):
 
 
 if __name__ == '__main__':
-    parquet_dir = '/mnt/data_partition/downloads/parquet_dataset/cmdfallfull'
+    parquet_dir = '/home/nda97531/Documents/datasets/dataset_parquet/cmdfull'
     inertial_freq = 50
     skeletal_freq = 20
 
     CMDFallParquet(
-        raw_folder='/mnt/data_partition/downloads/CMDFall',
+        raw_folder='/home/nda97531/Documents/datasets/CMDFall',
         destination_folder=parquet_dir,
         sampling_rates={CMDFallConst.MODAL_INERTIA: inertial_freq,
-                        CMDFallConst.MODAL_SKELETON: skeletal_freq},
-        min_length_segment=4
+                        CMDFallConst.MODAL_SKELETON: skeletal_freq}
     ).run()
 
     # window_size_sec = 3

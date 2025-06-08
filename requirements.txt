@@ -1,9 +1,9 @@
-loguru~=0.5.3
-polars~=1.8.2
-pandas~=2.2.2
-numpy~=1.26.4
-scipy~=1.13.1
-orjson~=3.10.7
-transforms3d~=0.4.2
-bezier~=2024.6.20
+loguru
+polars
+pandas
+numpy
+scipy
+orjson
+transforms3d
+bezier
 tqdm
