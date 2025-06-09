@@ -1,13 +1,16 @@
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-import pandas as pd
+import polars as pl
 import numpy as np
 
-ske_file = '/mnt/data_partition/UCD/dataset_processed/UP-Fall_new/skeleton/subject_12/Subject12Activity1Trial1.parquet'
+ske_file = '/home/nda97531/Documents/datasets/dataset_parquet/UP-Fall/skeleton/subject_2/Subject2Activity1Trial1.parquet'
 ine_file = ske_file.replace('/skeleton/', '/inertia/')
 
-ske_df = pd.read_parquet(ske_file)
-ine_df = pd.read_parquet(ine_file)
+ske_df = pl.read_parquet(ske_file)
+ine_df = pl.read_parquet(ine_file)
+
+assert ske_df.columns[0] == 'timestamp(ms)' and ske_df.columns[-1] == 'label'
+assert ine_df.columns[0] == 'timestamp(ms)' and ine_df.columns[-1] == 'label'
 
 ske_arr = ske_df.to_numpy()
 ine_arr = ine_df.to_numpy()
@@ -34,7 +37,7 @@ plot_acc = [ax1.plot([], [], lw=2)[0] for _ in range(3)]
 plot_ske = ax2.scatter([], [])
 plots = [*plot_acc, plot_ske]
 
-label = ax1.text(0.1, 0.9, "", bbox={'facecolor': 'w', 'alpha': 0.5, 'pad': 5},
+label = ax1.text(0.2, 0.9, "", bbox={'facecolor': 'w', 'alpha': 0.5, 'pad': 5},
                  transform=ax1.transAxes, ha="center")
 
 ax1.set_ylim(-15, 15)
@@ -52,7 +55,7 @@ def update(frame_idx):
     for axis in range(3):
         plots[axis].set_data(np.arange(len(window_data)), window_data[:, axis])
     plots[3].set_offsets(ske_arr[frame_idx])
-    label.set_text(str(lbl_arr[frame_idx, 1]))
+    label.set_text(f'label: {int(lbl_arr[frame_idx, 1])}')
     return plots
 
 
