@@ -289,7 +289,7 @@ class NpyWindowFormatter:
         if df_freq is None:
             df_secs = (df.item(-1, 'timestamp(ms)') - df.item(0, 'timestamp(ms)')) / 1000
             df_freq = (len(df) - 1) / df_secs
-        window_size_row = round(self.window_size_sec * df_freq)
+        window_size_row = int(round(self.window_size_sec * df_freq))
 
         # convert data from DataFrame to numpy array
         arr = df.to_numpy()
@@ -316,7 +316,7 @@ class NpyWindowFormatter:
         # if this is a session of short activity, run shifting window
         if is_short_activity:
             assert process_label, 'Label needed to run short activity.'
-            min_step_size_row = int(self.min_step_size_sec * df_freq)
+            min_step_size_row = int(round(self.min_step_size_sec * df_freq))
 
             # find short activity indices
             bin_label = label_arr == session_label
@@ -338,7 +338,7 @@ class NpyWindowFormatter:
 
         # if this is a session of long activity, run sliding window
         else:
-            step_size_row = int((step_size_sec or self.step_size_sec) * df_freq)
+            step_size_row = int(round((step_size_sec or self.step_size_sec) * df_freq))
             windows = sliding_window(arr, window_size=window_size_row, step_size=step_size_row)
 
             if process_label:
@@ -465,7 +465,7 @@ class NpyWindowFormatter:
             windows['label'] = windows_label
 
             # append result of this modal
-            num_windows = len(windows[list(windows.keys())[0]])
+            num_windows = len(windows_label)
             if min_num_windows != float('inf'):
                 assert abs(num_windows - min_num_windows) < int(self.window_size_sec / self.step_size_sec)
             min_num_windows = min(min_num_windows, num_windows)
