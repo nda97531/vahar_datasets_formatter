@@ -2,7 +2,7 @@ import itertools
 import os
 import re
 import zipfile
-
+from tqdm import tqdm
 import numpy as np
 import orjson
 import pandas as pd
@@ -401,7 +401,7 @@ class UPFallNpyWindow(NpyWindowFormatter):
 
         result = []
         # for each session
-        for parquet_session in parquet_sessions.iter_rows(named=True):
+        for parquet_session in tqdm(parquet_sessions.iter_rows(named=True)):
             # get session info
             _, subject, session_id = self.get_parquet_session_info(list(parquet_session.values())[0])
             session_regex = re.match('Subject(?:[0-9]*)Activity([0-9]*)Trial([0-9]*)', session_id)
